@@ -1,9 +1,11 @@
+import { AssumptionChips } from "./components/AssumptionChips";
 import { InputPanel } from "./components/InputPanel";
+import { RefineBar } from "./components/RefineBar";
 import { ResultGroup } from "./components/ResultGroup";
 import { useRecommendation } from "./hooks/useRecommendation";
 
 export default function App() {
-  const { status, response, error, submit } = useRecommendation();
+  const { status, response, error, submit, refine } = useRecommendation();
 
   return (
     <main className="mx-auto max-w-2xl px-4 py-10">
@@ -22,6 +24,11 @@ export default function App() {
 
       {status === "ready" && response && (
         <div className="mt-8">
+          <AssumptionChips
+            assumptions={response.assumptions}
+            question={response.clarifying_question}
+            onAnswer={refine}
+          />
           {response.relaxations.map((note) => (
             <p key={note} className="mb-3 rounded-lg bg-amber-50 p-3 text-sm text-amber-800">
               {note}
@@ -30,6 +37,7 @@ export default function App() {
           {response.groups.map((group) => (
             <ResultGroup key={group.label} group={group} />
           ))}
+          <RefineBar onRefine={refine} busy={false} />
         </div>
       )}
     </main>

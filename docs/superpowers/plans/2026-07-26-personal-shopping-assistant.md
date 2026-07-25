@@ -502,9 +502,15 @@ Expected: 5 passed.
 cd backend && python scripts/profile_dataset.py data/amz_in_total_products_data_processed.csv
 ```
 
-Expected: `rows: 1589160`, `qualified: 179049`, `categories: 214`, `categories_ge_80: 151`.
-These figures must match docs/dataset.md. If they do not, the CSV differs from the one
-analysed and the ingest quotas in Task 5 need rechecking.
+Expected: `rows: 1589160`, `qualified: 179049`, `categories: 208`, `categories_ge_80: 151`.
+
+Note `categories: 208`, not the 214 distinct categories in the file — this counter only
+sees categories with at least one *qualifying* row. Six contribute none (three `SnS_*`
+subscribe-and-save buckets, `Vitamins & Supplements - Pharmacy`, `Kundan Jewellery`, and two
+categories with no Latin-script titles). All are negligible.
+
+If `rows`, `qualified`, or `categories_ge_80` differ, the CSV is not the one analysed and
+the ingest quotas in Task 6 need rechecking.
 
 - [ ] **Step 7: Commit**
 

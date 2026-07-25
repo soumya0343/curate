@@ -5,7 +5,7 @@ import { ResultGroup } from "./components/ResultGroup";
 import { useRecommendation } from "./hooks/useRecommendation";
 
 export default function App() {
-  const { status, response, error, submit, refine } = useRecommendation();
+  const { status, response, error, submitStreaming, refine, stage, partial } = useRecommendation();
 
   return (
     <main className="mx-auto max-w-2xl px-4 py-10">
@@ -14,12 +14,25 @@ export default function App() {
         Describe what you need. I'll work out the details.
       </p>
 
-      <InputPanel onSubmit={submit} busy={status === "loading"} />
+      <InputPanel onSubmit={submitStreaming} busy={status === "loading"} />
 
       {status === "error" && (
         <p className="mt-6 rounded-lg bg-red-50 p-4 text-sm text-red-700">
           {error?.message}
         </p>
+      )}
+
+      {partial && stage !== "ready" && (
+        <div className="mt-8">
+          <AssumptionChips
+            assumptions={partial.assumptions ?? []}
+            question={partial.clarifying_question ?? null}
+            onAnswer={refine}
+          />
+          <p className="text-sm text-slate-500">
+            {stage === "searching" ? "Searching the catalogue…" : "Choosing the best matches…"}
+          </p>
+        </div>
       )}
 
       {status === "ready" && response && (

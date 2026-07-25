@@ -4,6 +4,12 @@ backend/data/enriched/
 backend/data/*.raw.jsonl
 backend/data/profile.json
 
+# Agent scaffolding and internal working docs — not part of the deliverable
+.claude/
+.agents/
+docs/
+AGENTS.md
+
 # Secrets
 .env
 .env.local

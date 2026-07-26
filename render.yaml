@@ -1,0 +1,55 @@
+# Render blueprint for the FastAPI backend (backend/Dockerfile). See
+# docs/deployment.md for the full walkthrough, including why --workers 1 is
+# mandatory (in-memory sessions), the three most likely failure modes, and
+# the free-tier cold-start caveat.
+services:
+  - type: web
+    name: shopping-assistant-api
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    healthCheckPath: /api/health
+    envVars:
+      # Secrets — set these in the Render dashboard (sync: false means Render
+      # will not store a value from this file; it prompts for one instead).
+      # Real names, read from backend/app/config.py: Settings.gemini_api_key
+      # and Settings.groq_api_key map to GEMINI_API_KEY / GROQ_API_KEY via
+      # pydantic-settings' default env-var naming (field name, uppercased).
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+
+      # Comma-separated list, split by Settings._split_origins
+      # (backend/app/config.py:32-37). Must include the production Vercel
+      # domain once known; preview deployments are covered separately by the
+      # allow_origin_regex in backend/app/main.py and do not need an entry
+      # here.
+      - key: CORS_ORIGINS
+        sync: false
+
+      # --- Everything below has a working default in Settings and does NOT
+      # need to be set for the real (non-mock) deployment. They are listed so
+      # the full configuration surface is visible in one place. Uncomment and
+      # override only if the default is wrong for a given deploy:
+      #
+      # - key: GENERATION_PRIMARY
+      #   value: gemini
+      # - key: GENERATION_FALLBACK
+      #   value: groq
+      # - key: EMBEDDING_MODEL
+      #   value: gemini-embedding-001
+      # - key: EMBEDDING_DIMS
+      #   value: "768"
+      # - key: DATA_DIR
+      #   value: /app/data
+      # - key: SESSION_TTL_SECONDS
+      #   value: "1800"
+      # - key: LLM_TIMEOUT_SECONDS
+      #   value: "30.0"
+      #
+      # To deploy the mock-data variant instead (no API keys, see
+      # docs/deployment.md "deploying with mock data"), set DATA_DIR to
+      # /app/data/mock and set EMBEDDING_MODEL / EMBEDDING_DIMS to whatever
+      # is recorded in backend/data/mock/embeddings.manifest.json once that
+      # file exists — do not guess those values here.

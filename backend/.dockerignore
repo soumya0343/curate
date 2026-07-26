@@ -1,0 +1,31 @@
+# Keeps `COPY data ./data` in the Dockerfile from baking offline-only or
+# multi-hundred-MB artifacts into the deploy image. In particular:
+# backend/data/amz_in_total_products_data_processed.csv is ~640 MB (du -sh
+# reports 639M) — the raw Kaggle source dump. It is never read by the running
+# app (app/catalogue/index.py only reads catalogue.jsonl.gz, embeddings.npy,
+# and embeddings.manifest.json), so it must never reach the image.
+*.csv
+data/enriched/
+data/*.raw.jsonl
+data/profile.json
+
+# Python bytecode / caches — never needed at runtime, and stale .pyc files
+# from a different Python minor version (see Dockerfile: base image is
+# python:3.13-slim) would be actively wrong to ship.
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Test suite and its fixtures. Not needed by the running service, and
+# backend/tests/test_verifiers.py + backend/tests/test_profile.py are the
+# only code in this repo that import scripts/ modules directly — excluding
+# tests/ here is part of why COPY scripts ./scripts was dropped from the
+# Dockerfile entirely (see Dockerfile comment).
+tests/
+
+# Local secrets and environment overrides must never be baked into an image;
+# Render/Vercel environment variables are the actual delivery mechanism.
+.env
+.venv/
+.pytest_cache/
+eval/

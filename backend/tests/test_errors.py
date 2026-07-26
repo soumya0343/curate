@@ -26,3 +26,23 @@ def test_log_stage_emits_single_json_line(capsys):
     assert payload["request_id"] == "req-1"
     assert payload["stage"] == "intent"
     assert payload["provider"] == "gemini"
+
+
+def test_logging_follows_a_rebound_stderr():
+    """setup_logging() runs once per process, so the handler must not own the
+    stream it first saw - or whichever module configures logging earliest
+    decides where every later log line goes."""
+    import io
+    import sys
+
+    from app.core.logging import log_stage, setup_logging
+
+    setup_logging()
+    buffer = io.StringIO()
+    original, sys.stderr = sys.stderr, buffer
+    try:
+        log_stage("req-2", "retrieval", candidates=12)
+    finally:
+        sys.stderr = original
+
+    assert json.loads(buffer.getvalue().strip())["stage"] == "retrieval"

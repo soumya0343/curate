@@ -309,19 +309,18 @@ class GroqGeneration:
                                         provider=self.name)
 
 
-class CerebrasGeneration:
-    """Cerebras Inference, over its OpenAI-compatible HTTP API.
+class OpenAICompatibleGeneration:
+    """Any provider exposing `POST {base_url}/chat/completions` with a bearer token.
 
-    Called with httpx rather than the vendor SDK: the endpoint is a plain
-    `POST /chat/completions`, httpx is already a dependency, and one less SDK is
-    one less place for a client-construction difference to hide. `base_url` and
-    `model` stay configurable so a model rename does not require a code change.
+    Called with httpx rather than a vendor SDK: the request is a plain JSON POST,
+    httpx is already a dependency, and one less SDK is one less place for a
+    client-construction difference to hide. Two providers here share this shape
+    exactly, so they are configuration rather than code.
     """
 
-    name = "cerebras"
+    name = "openai-compatible"
 
-    def __init__(self, api_keys: str | list[str], model: str = "llama-3.3-70b",
-                 base_url: str = "https://api.cerebras.ai/v1",
+    def __init__(self, api_keys: str | list[str], model: str, base_url: str,
                  timeout: float = 30.0) -> None:
         self._ring = KeyRing(api_keys)
         self._model = model
@@ -350,6 +349,36 @@ class CerebrasGeneration:
 
         return await call_with_rotation(self._ring, call, request_id=request_id,
                                         provider=self.name)
+
+
+class CerebrasGeneration(OpenAICompatibleGeneration):
+    name = "cerebras"
+
+    def __init__(self, api_keys: str | list[str], model: str = "llama-3.3-70b",
+                 base_url: str = "https://api.cerebras.ai/v1",
+                 timeout: float = 30.0) -> None:
+        super().__init__(api_keys, model=model, base_url=base_url, timeout=timeout)
+
+
+class GitHubModelsGeneration(OpenAICompatibleGeneration):
+    """GitHub Models — free inference authenticated with a GitHub PAT.
+
+    The credential is a personal access token with the `models:read` scope, not
+    a separate API key, which is why the setting is `GITHUB_TOKEN(S)` rather
+    than `*_API_KEY`. Model ids are publisher-qualified (`openai/gpt-4o-mini`,
+    `meta/Llama-3.3-70B-Instruct`).
+
+    Placed in the chain, not at its head: the free tier's daily request ceiling
+    is low enough that it is a useful overflow provider and a poor primary, and
+    hopeless for the offline enrichment pass, which makes ~1,000 calls.
+    """
+
+    name = "github"
+
+    def __init__(self, api_keys: str | list[str], model: str = "openai/gpt-4o-mini",
+                 base_url: str = "https://models.github.ai/inference",
+                 timeout: float = 30.0) -> None:
+        super().__init__(api_keys, model=model, base_url=base_url, timeout=timeout)
 
 
 class FallbackChain:

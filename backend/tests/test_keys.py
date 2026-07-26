@@ -4,6 +4,8 @@ import pytest
 from app.config import Settings
 from app.core.errors import ProviderUnavailable, RateLimited
 from app.providers.generation import (CerebrasGeneration, FallbackChain,
+                                      GitHubModelsGeneration,
+                                      OpenAICompatibleGeneration,
                                       StubGenerationProvider, parse_json_response)
 from app.providers.keys import KeyRing, call_with_rotation, is_rate_limited
 
@@ -190,8 +192,8 @@ def test_unparseable_text_still_raises():
 
 # --- cerebras ----------------------------------------------------------
 
-async def test_cerebras_posts_openai_shaped_request_and_rotates(monkeypatch):
-    seen: list[tuple[str, dict]] = []
+def _record_http(monkeypatch, seen: list, limit_first: bool = False):
+    """Stand in for httpx.AsyncClient, capturing every request."""
 
     class _Client:
         def __init__(self, *a, **kw) -> None:
@@ -204,23 +206,58 @@ async def test_cerebras_posts_openai_shaped_request_and_rotates(monkeypatch):
             return None
 
         async def post(self, url, headers, json):
-            seen.append((headers["Authorization"], json))
+            seen.append({"url": url, "auth": headers["Authorization"], "body": json})
             request = httpx.Request("POST", url)
-            if headers["Authorization"].endswith("key1"):
+            if limit_first and headers["Authorization"].endswith("key1"):
                 return httpx.Response(429, request=request, json={"error": "limit"})
             return httpx.Response(200, request=request, json={
                 "choices": [{"message": {"content": '{"groups": []}'}}]})
 
     monkeypatch.setattr(httpx, "AsyncClient", _Client)
 
+
+async def test_cerebras_posts_openai_shaped_request_and_rotates(monkeypatch):
+    seen: list[dict] = []
+    _record_http(monkeypatch, seen, limit_first=True)
+
     provider = CerebrasGeneration(["key1", "key2"], model="llama-3.3-70b")
     assert await provider.generate_json("prompt", request_id="r") == {"groups": []}
 
-    assert [auth for auth, _ in seen] == ["Bearer key1", "Bearer key2"]
-    _, body = seen[-1]
+    assert [r["auth"] for r in seen] == ["Bearer key1", "Bearer key2"]
+    assert seen[-1]["url"] == "https://api.cerebras.ai/v1/chat/completions"
+    body = seen[-1]["body"]
     assert body["model"] == "llama-3.3-70b"
     assert body["response_format"] == {"type": "json_object"}
     assert body["messages"] == [{"role": "user", "content": "prompt"}]
+
+
+async def test_github_models_hits_its_own_endpoint_with_a_pat(monkeypatch):
+    seen: list[dict] = []
+    _record_http(monkeypatch, seen)
+
+    provider = GitHubModelsGeneration(["ghp_token"])
+    assert await provider.generate_json("prompt", request_id="r") == {"groups": []}
+
+    assert seen[0]["url"] == "https://models.github.ai/inference/chat/completions"
+    assert seen[0]["auth"] == "Bearer ghp_token"
+    assert seen[0]["body"]["model"] == "openai/gpt-4o-mini", (
+        "GitHub Models ids are publisher-qualified")
+
+
+async def test_github_models_rotates_tokens_on_a_rate_limit(monkeypatch):
+    """Its free tier has a daily ceiling, which is the case rotation is for."""
+    seen: list[dict] = []
+    _record_http(monkeypatch, seen, limit_first=True)
+
+    provider = GitHubModelsGeneration(["key1", "key2"])
+    await provider.generate_json("prompt", request_id="r")
+    assert [r["auth"] for r in seen] == ["Bearer key1", "Bearer key2"]
+
+
+def test_both_http_providers_share_one_implementation():
+    """Same wire shape, so a fix to one must not need porting to the other."""
+    assert issubclass(CerebrasGeneration, OpenAICompatibleGeneration)
+    assert issubclass(GitHubModelsGeneration, OpenAICompatibleGeneration)
 
 
 # --- settings ----------------------------------------------------------
@@ -234,6 +271,14 @@ def test_keys_for_merges_singular_and_plural(monkeypatch):
 def test_generation_chain_overrides_primary_and_fallback(monkeypatch):
     monkeypatch.setenv("GENERATION_CHAIN", "gemini,cerebras,groq")
     assert Settings().generation_order() == ["gemini", "cerebras", "groq"]
+
+
+def test_github_credentials_are_tokens_not_api_keys(monkeypatch):
+    """GitHub Models authenticates with a PAT carrying models:read, so the
+    setting is GITHUB_TOKEN(S). keys_for() hides the difference."""
+    monkeypatch.setenv("GITHUB_TOKEN", "ghp_one")
+    monkeypatch.setenv("GITHUB_TOKENS", "ghp_two,ghp_three")
+    assert Settings().keys_for("github") == ["ghp_one", "ghp_two", "ghp_three"]
 
 
 def test_legacy_primary_and_fallback_still_work():

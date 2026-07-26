@@ -7,7 +7,8 @@ from app.providers.embedding import (EmbeddingProvider, GeminiEmbedding,
                                      HashingEmbedding)
 from app.providers.generation import (CerebrasGeneration, FallbackChain,
                                       GeminiGeneration, GenerationProvider,
-                                      GroqGeneration, MockGeneration)
+                                      GitHubModelsGeneration, GroqGeneration,
+                                      MockGeneration)
 from app.services.pipeline import RecommendationPipeline
 from app.services.sessions import SessionStore
 
@@ -29,6 +30,9 @@ def _build_generation(settings: Settings) -> GenerationProvider:
         "cerebras": lambda keys: CerebrasGeneration(
             keys, model=settings.cerebras_model,
             base_url=settings.cerebras_base_url, timeout=timeout),
+        "github": lambda keys: GitHubModelsGeneration(
+            keys, model=settings.github_model,
+            base_url=settings.github_base_url, timeout=timeout),
     }
 
     order = settings.generation_order()

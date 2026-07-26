@@ -32,11 +32,14 @@ each field to its uppercased name unless told otherwise):
 | `GEMINI_API_KEY` | `gemini_api_key` | `None` | Required for real embeddings — `_build_embedding` raises `ProviderUnavailable` if unset, because embeddings have no fallback provider (query vectors must share the catalogue's vector space). **Not required when `EMBEDDING_MODEL=hashing-bow-v1`**, the keyless lexical embedder used by the mock catalogue (§7). |
 | `GROQ_API_KEY` | `groq_api_key` | `None` | Needed only if `groq` appears in the chain. A provider with no key is skipped, not fatal. |
 | `CEREBRAS_API_KEY` | `cerebras_api_key` | `None` | Same. Cerebras is called over its OpenAI-compatible HTTP API. |
-| `GEMINI_API_KEYS` / `GROQ_API_KEYS` / `CEREBRAS_API_KEYS` | `*_api_keys` | `[]` | Comma-separated. Several keys for one provider; a rate limit rotates to the next and retries. Merged with the singular form. |
-| `GENERATION_CHAIN` | `generation_chain` | unset | Ordered, comma-separated, e.g. `gemini,cerebras,groq`. Overrides the two settings below. |
-| `GENERATION_PRIMARY` | `generation_primary` | `"gemini"` | Legacy pair, used when `GENERATION_CHAIN` is unset. `"gemini"`, `"groq"`, `"cerebras"`, or `"mock"` — `mock` is the keyless rule-based provider (§7) and ends any chain it appears in. |
+| `GITHUB_TOKEN` | `github_token` | `None` | GitHub Models. A **personal access token with the `models:read` scope**, not an API key — hence the different name. Free, low daily ceiling. |
+| `GEMINI_API_KEYS` / `GROQ_API_KEYS` / `CEREBRAS_API_KEYS` / `GITHUB_TOKENS` | `*_api_keys`, `github_tokens` | `[]` | Comma-separated. Several credentials for one provider; a rate limit rotates to the next and retries. Merged with the singular form. |
+| `GENERATION_CHAIN` | `generation_chain` | unset | Ordered, comma-separated, e.g. `gemini,cerebras,groq,github`. Overrides the two settings below. |
+| `GENERATION_PRIMARY` | `generation_primary` | `"gemini"` | Legacy pair, used when `GENERATION_CHAIN` is unset. `"gemini"`, `"groq"`, `"cerebras"`, `"github"`, or `"mock"` — `mock` is the keyless rule-based provider (§7) and ends any chain it appears in. |
 | `CEREBRAS_MODEL` | `cerebras_model` | `"llama-3.3-70b"` | Configurable so a model rename is an env change, not a code change. |
 | `CEREBRAS_BASE_URL` | `cerebras_base_url` | `"https://api.cerebras.ai/v1"` | |
+| `GITHUB_MODEL` | `github_model` | `"openai/gpt-4o-mini"` | GitHub Models ids are publisher-qualified (`openai/…`, `meta/…`, `mistral-ai/…`). |
+| `GITHUB_BASE_URL` | `github_base_url` | `"https://models.github.ai/inference"` | |
 | `GENERATION_FALLBACK` | `generation_fallback` | `"groq"` | Same constraint; set to empty/None to disable fallback. |
 | `EMBEDDING_MODEL` | `embedding_model` | `"gemini-embedding-001"` | **Pinned to whatever built the committed embeddings.** Changing it without rebuilding `embeddings.npy` trips `ManifestMismatch` (`app/catalogue/index.py:49-53`) by design — do not "fix" that check. |
 | `EMBEDDING_DIMS` | `embedding_dims` | `768` | Same constraint, checked at `app/catalogue/index.py:54-56`. |

@@ -4,9 +4,8 @@ A personal shopping assistant. You describe what you need in plain English —
 *"three days trekking in Manali in December, under ₹8,000"* — and it returns
 product recommendations grouped by need, each with a one-sentence reason it fits.
 
-The catalogue is Amazon India product data (1.59M source rows, sampled down to a
-~20k working catalogue). See [docs/dataset.md](docs/dataset.md) for what that data
-is and what is wrong with it.
+The catalogue is derived from Amazon India product data (1.59M source rows).
+Licence and attribution: [ATTRIBUTION.md](ATTRIBUTION.md).
 
 ## What makes it different from a search box
 
@@ -22,13 +21,104 @@ plain deterministic Python — embeddings don't encode price, and a ₹2,000 jac
 and a ₹22,000 jacket have near-identical vectors.
 
 **It shows its guesses.** Everything the model inferred but you didn't say
-(season, gender, budget) comes back as an editable assumption chip. Filters that
-had to be widened come back as a visible notice.
+(season, gender, budget) comes back as an assumption chip. Filters that had to be
+widened come back as a visible notice.
 
 **It refuses to fabricate.** Product attributes carry provenance. Only
 title-verified facts may be stated as fact or used to exclude a product; inferred
-ones can only nudge ranking. A group with no good match returns empty and says
-so rather than padding with a bad pick.
+ones can only nudge ranking. A group with no good match returns empty and says so
+rather than padding with a bad pick.
+
+A real run, against the synthetic catalogue with Gemini doing the reasoning:
+
+```
+"I am going for a trek to Hampta Pass in the last week of October for one week.
+ Please find me trekking essentials and clothing."
+
+intent      activity=trekking  destination=Hampta Pass  season=late October  duration_days=7
+assumptions weather: cold-weather conditions likely (medium)
+            gender: unisex / general search (low)
+question    Are you looking for men's or women's clothing and footwear?
+
+[Trekking Footwear]  ₹2199  Quechua NH100 Hiking Shoes Unisex Waterproof
+                            "A waterproof unisex hiking shoe suited for keeping feet dry…"
+[Outer Insulation]   ₹3999  Decathlon Forclaz MT100 Padded Winter Jacket for Men
+[Trekking Backpack]  ₹4299  Tripole Walker 55L Internal Frame Rucksack with Rain Cover
+                            "A 55L internal frame rucksack with an included rain cover…"
+[Thermal Base Layers]  empty — No suitable match found in the catalogue for this need.
+```
+
+Note the last group. It is empty and says why, rather than being dropped.
+
+## Running it
+
+Three modes, in increasing order of what they need.
+
+### 1. No credentials at all
+
+Everything runs: API, streaming, frontend, sessions, refinement.
+
+```bash
+cd backend
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+python scripts/build_mock_catalogue.py
+
+DATA_DIR=data/mock EMBEDDING_MODEL=hashing-bow-v1 EMBEDDING_DIMS=256 \
+  GENERATION_PRIMARY=mock uvicorn app.main:app --workers 1 --port 8000
+```
+
+A synthetic catalogue (147 invented products, 25 categories) stands in for the
+real one, a hashed bag-of-words embedder stands in for Gemini, and a rule-based
+provider stands in for the LLM. **It proves the machinery works; it says nothing
+about recommendation quality.** The embedder has no IDF, so a query for "thermal
+base layer" can rank a saree above a thermal vest.
+
+### 2. Real models, synthetic catalogue
+
+```bash
+cp .env.example .env      # fill in at least GEMINI_API_KEY
+python scripts/check_providers.py --embeddings   # verify the keys before trusting them
+DATA_DIR=data/mock EMBEDDING_MODEL=hashing-bow-v1 EMBEDDING_DIMS=256 \
+  uvicorn app.main:app --workers 1 --port 8000
+```
+
+Real intent extraction and real explanations, still over invented products. This
+is the mode the example above was produced in.
+
+### 3. Real catalogue
+
+Needs the offline pipeline (see **Current state**). Once it has produced
+`catalogue.jsonl.gz`, `embeddings.npy` and `embeddings.manifest.json` in
+`backend/data/`, drop the `DATA_DIR` and `EMBEDDING_*` overrides.
+
+`--workers 1` is not optional in any mode. Sessions live in a process-local dict,
+so a session created on worker A is missing on worker B. Redis is the production
+path.
+
+### Frontend
+
+```bash
+cd frontend
+npm install
+cp .env.example .env      # VITE_API_BASE_URL, defaults to localhost:8000
+npm run dev               # http://localhost:5173
+npx vitest run            # no npm test script yet
+```
+
+Details — streaming state machine, SSE parsing, component rules — in
+[frontend/README.md](frontend/README.md).
+
+### Tests
+
+```bash
+cd backend && python -m pytest -q     # 161 tests, no network, no keys
+cd frontend && npx vitest run         # 16 tests
+```
+
+Run the backend suite **from `backend/`**. `pytest.ini` lives there, so from the
+repo root `asyncio_mode` never applies and every async test fails on a missing
+plugin — a working-directory mistake that reads as a code regression.
 
 ## API
 
@@ -37,6 +127,9 @@ so rather than padding with a bad pick.
 | `GET` | `/api/health` | `{"status": "ok"}` |
 | `POST` | `/api/recommend` | Runs the pipeline, returns one JSON response |
 | `POST` | `/api/recommend/stream` | Same pipeline, streamed as SSE frames |
+| `GET` | `/api/catalogue` | Browse products — filter, sort, paginate (Postgres) |
+| `GET` | `/api/catalogue/categories` | Category names with counts |
+| `GET` | `/api/catalogue/{product_id}` | One product |
 
 Request body for both recommend routes:
 
@@ -47,7 +140,7 @@ Request body for both recommend routes:
 Pass the `session_id` from a previous response to refine — *"make it cheaper"*
 merges onto the prior intent instead of starting over.
 
-Response shape (abridged; values below are illustrative, not a real run):
+Response shape (abridged):
 
 ```json
 {
@@ -65,7 +158,7 @@ Response shape (abridged; values below are illustrative, not a real run):
       "recommendations": [
         { "product_id": "B0…", "title": "…", "price": 2499,
           "price_tier": "mid", "rating": 4.2, "reviews": 318,
-          "image_url": "…", "product_url": "https://www.amazon.in/dp/B0…",
+          "image_url": "…", "product_url": "…",
           "reason": "Suited to cold-weather trekking and inside your budget." }
       ],
       "empty_reason": null },
@@ -78,9 +171,6 @@ Response shape (abridged; values below are illustrative, not a real run):
 }
 ```
 
-Note the second group: empty, with a reason, rather than omitted. And
-`relaxations` — non-empty when a filter had to be widened to return anything.
-
 The stream emits `understood` → `searching` → `results` → `done`, or `error`.
 It is SSE-over-POST rather than `EventSource`, which is GET-only: the query is a
 free-text sentence plus session state, and putting that in a URL hits length
@@ -88,62 +178,68 @@ limits and writes user queries into access logs. The frontend reads it with
 `fetch` + `ReadableStream`.
 
 Errors return `{"error": {"code", "message", "retryable"}}` with codes
-`INVALID_QUERY` (400), `RATE_LIMITED` (429), `PROVIDER_UNAVAILABLE` (503),
-`INTERNAL` (500).
+`INVALID_QUERY` (400), `NOT_FOUND` (404), `RATE_LIMITED` (429),
+`PROVIDER_UNAVAILABLE` (503), `CATALOGUE_UNAVAILABLE` (503), `INTERNAL` (500).
+
+`RATE_LIMITED` and `CATALOGUE_UNAVAILABLE` are `retryable: true`; the rest are
+not. That distinction is the point of having codes at all.
 
 ## Stack
 
-- **Backend** — Python 3.11+, FastAPI, Pydantic v2, NumPy. No database: the
-  catalogue is a gzipped JSONL file and an `.npy` matrix, loaded once at startup.
-- **Frontend** — React 19, TypeScript, Vite, Tailwind CSS.
-- **Models** — Gemini 2.5 Flash for generation with Groq `llama-3.3-70b-versatile`
-  as fallback; `gemini-embedding-001` at 768 dims for embeddings (no fallback —
-  see [ARCHITECTURE.md](ARCHITECTURE.md#embeddings-have-no-fallback-chain)).
+- **Backend** — Python 3.11+ (developed on 3.13), FastAPI, Pydantic v2, NumPy.
+- **Frontend** — React 19, TypeScript, Vite, Tailwind 3.
+- **Recommendation reads files, not a database.** The catalogue is a gzipped
+  JSONL plus an `.npy` matrix, loaded once at startup. At this scale a cosine
+  search over the matrix is ~1 ms; a database round trip is 1–3 ms before doing
+  any work.
+- **Postgres backs catalogue *browsing* only** (`/api/catalogue`). It is a
+  mirror, seeded one-way from the JSONL by `scripts/seed_db.py`, and it is
+  optional: if it is unreachable the app still boots and recommendation is
+  unaffected — browsing returns `CATALOGUE_UNAVAILABLE`.
 
-## Running it
+### Models and providers
 
-### Backend
+Generation runs through an ordered chain; each provider is tried in turn and one
+with no credential is skipped rather than failing the chain.
 
-```bash
-cd backend
-python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-cp .env.example .env          # then fill in GEMINI_API_KEY
-pytest -q                     # tests need no keys and no network
-uvicorn app.main:app --reload --workers 1
-```
+| Provider | Default model | Notes |
+|---|---|---|
+| `gemini` | `gemini-flash-latest` | Also the embedding provider |
+| `groq` | `llama-3.3-70b-versatile` | |
+| `cerebras` | `gpt-oss-120b` | Needs a paid account — free tier returns 402 |
+| `github` | `openai/gpt-4o-mini` | GitHub Models, a PAT with `models:read`. Low daily ceiling, so put it last |
+| `mock` | — | Keyless rule-based provider. Ends any chain it appears in |
 
-`--workers 1` is not optional. Sessions live in a process-local dict, so a
-session created on worker A is missing on worker B. Redis is the production path.
+Embeddings are `gemini-embedding-001` at 768 dims, or the keyless
+`hashing-bow-v1` at 256. **Embeddings never fall back to another provider** —
+query vectors must share the catalogue's vector space, and a swap would return
+plausible-looking numbers that are noise. Key rotation is safe and provider
+fallback is not, for exactly that reason.
 
-### Frontend
-
-```bash
-cd frontend
-npm install
-cp .env.example .env          # VITE_API_BASE_URL, defaults to localhost:8000
-npm run dev
-npx vitest run                # no npm test script yet
-```
-
-Frontend specifics — streaming state machine, SSE parsing, component rules —
-are in [frontend/README.md](frontend/README.md).
+`scripts/check_providers.py` tests every configured credential individually
+against the real API and prints which ones work, masked to the last four
+characters. Run it before assuming a key is good.
 
 ### Environment
 
 | Variable | Default | Notes |
 |---|---|---|
-| `GEMINI_API_KEY` | — | Required. Embeddings have no fallback. |
-| `GROQ_API_KEY` | — | Optional. Without it there is no generation fallback. |
-| `GENERATION_PRIMARY` | `gemini` | |
-| `GENERATION_FALLBACK` | `groq` | |
-| `CORS_ORIGINS` | `http://localhost:5173` | Comma-separated. |
+| `GEMINI_API_KEY` | — | Required unless `EMBEDDING_MODEL=hashing-bow-v1` |
+| `GROQ_API_KEY`, `CEREBRAS_API_KEY` | — | Optional chain members |
+| `GITHUB_TOKEN` | — | GitHub Models. A PAT with `models:read`, not an API key |
+| `*_API_KEYS`, `GITHUB_TOKENS` | — | Comma-separated. Several credentials per provider; a rate limit rotates to the next and retries |
+| `GENERATION_CHAIN` | — | e.g. `gemini,groq,github`. Overrides the pair below |
+| `GENERATION_PRIMARY` / `GENERATION_FALLBACK` | `gemini` / `groq` | Legacy pair, still honoured |
+| `GEMINI_MODEL`, `GROQ_MODEL`, `CEREBRAS_MODEL`, `GITHUB_MODEL` | see table above | Model ids drift; all four are config, not code |
+| `EMBEDDING_MODEL` / `EMBEDDING_DIMS` | `gemini-embedding-001` / `768` | Pinned. Must match `embeddings.manifest.json` |
+| `DATA_DIR` | `backend/data` | Point at `data/mock` for the synthetic catalogue |
+| `DATABASE_URL` | `postgresql://postgres:postgres@localhost:5432/catalogue` | Browsing only |
+| `CORS_ORIGINS` | `http://localhost:5173` | Comma-separated |
 | `SESSION_TTL_SECONDS` | `1800` | |
 | `LLM_TIMEOUT_SECONDS` | `30` | |
 
-`EMBEDDING_MODEL` and `EMBEDDING_DIMS` are pinned. Changing either requires
-rebuilding the catalogue embeddings; the manifest check will refuse to start
-otherwise.
+A single credential containing commas is read as several credentials, so putting
+the list in `GEMINI_API_KEY` rather than `GEMINI_API_KEYS` works too.
 
 ### Troubleshooting
 
@@ -152,13 +248,16 @@ per-request under load.
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `ManifestMismatch: catalogue built with … but configured …` | `EMBEDDING_MODEL` / `EMBEDDING_DIMS` no longer match `embeddings.manifest.json` | Revert the config, or re-embed the whole catalogue |
-| `ManifestMismatch: row misalignment: N products, M vectors` | JSONL and `.npy` are out of sync — something reordered one of them | Rebuild both from ingest; line order is a contract |
-| `FileNotFoundError` on `embeddings.manifest.json` | Ingest hasn't been run — see **Current state** | Nothing to do yet; tests run without it |
-| `ProviderUnavailable: GEMINI_API_KEY is required for embeddings` | No key | Set it. Embeddings deliberately have no fallback |
-| `PROVIDER_UNAVAILABLE` at request time | Primary failed and either there's no fallback key or it failed too | Check the `provider_failover` log line for the underlying error |
-| Browser console shows a CORS error | Frontend origin not in `CORS_ORIGINS` | Add it, or drop `VITE_API_BASE_URL` and use the Vite `/api` proxy |
-| Refinement forgets the previous query | Running more than one worker | `--workers 1`, or move sessions to Redis |
+| `ManifestMismatch: catalogue built with … but configured …` | `EMBEDDING_MODEL` / `EMBEDDING_DIMS` don't match the manifest | Fix the config, or re-embed the catalogue. Never loosen the check |
+| `ManifestMismatch: row misalignment: N products, M vectors` | JSONL and `.npy` are out of sync | Rebuild both; line order is a contract |
+| `FileNotFoundError` on `embeddings.manifest.json` | No catalogue at `DATA_DIR` | Build the mock one, or point `DATA_DIR` at `data/mock` |
+| `ProviderUnavailable: GEMINI_API_KEY is required for embeddings` | No key and not using the hashing embedder | Set the key, or set `EMBEDDING_MODEL=hashing-bow-v1` |
+| `404 … no longer available to new users` | The model id retired | Set `GEMINI_MODEL`. `check_providers.py` finds this in seconds |
+| `402 payment_required` from Cerebras | Free tier does not include inference | Drop `cerebras` from `GENERATION_CHAIN` until billing is on |
+| `RATE_LIMITED` (429) | Every credential on every provider refused on quota | Add keys to `*_API_KEYS`, or wait. It is retryable |
+| `CATALOGUE_UNAVAILABLE` on `/api/catalogue` | Postgres unreachable | Start it and run `scripts/seed_db.py`. Recommendation is unaffected |
+| Browser CORS error | Frontend origin not in `CORS_ORIGINS` | Add it, or drop `VITE_API_BASE_URL` and use the Vite `/api` proxy |
+| Refinement forgets the previous query | More than one worker | `--workers 1` |
 
 Logs are one JSON line per stage, keyed by `request_id`:
 
@@ -168,46 +267,58 @@ Logs are one JSON line per stage, keyed by `request_id`:
 
 ### Deploying
 
-The frontend is a static build (`npm run build`) — the CORS config already
-allows `https://*.vercel.app` for preview deployments. The backend needs a host
-that permits a long-lived process with the catalogue in memory, run with
-`--workers 1`, and `CORS_ORIGINS` pointed at the deployed frontend origin.
+Configuration and a step-by-step plan are in [DEPLOYMENT.md](DEPLOYMENT.md):
+Render for the backend (Docker), Vercel for the frontend. Nothing is deployed
+yet. The mock-data variant deploys with no credentials at all.
 
 Serverless is a poor fit: the catalogue and embedding matrix load at startup, so
 every cold start pays for it, and process-local sessions don't survive.
 
 ## Current state
 
-The runtime pipeline, API and frontend are built and tested against stub
-providers. The offline ingest that produces the catalogue artifacts is still
-being built — Tasks 4–13 of
-[docs/superpowers/plans/2026-07-26-catalogue-pipeline-v2.md](docs/superpowers/plans/2026-07-26-catalogue-pipeline-v2.md).
+**Built and tested:** the runtime pipeline, both API surfaces, streaming, the
+frontend, key rotation across four providers, the synthetic catalogue, and the
+deployment configuration. 161 backend tests and 16 frontend tests, no network and
+no credentials required.
 
-Until it runs, `backend/data/` holds the 670 MB source CSV and `profile.json`
-but not the three artifacts the app loads at startup:
+**Verified against live APIs:** Gemini (generation and embeddings, 768 dims),
+Groq and GitHub Models all answer. Cerebras returns 402 — the account needs
+billing.
 
-```
-backend/data/catalogue.jsonl.gz         # products, line order is a contract
-backend/data/embeddings.npy             # L2-normalised, row-aligned to the JSONL
-backend/data/embeddings.manifest.json   # model + dims, checked at startup
-```
+**Not done:** the offline pipeline that turns the 670 MB source CSV into the real
+catalogue — category map, ingest, enrichment, embeddings. Until it runs,
+`backend/data/` holds the source CSV, `profile.json` and the synthetic catalogue
+in `data/mock/`, but not the three artifacts the app loads by default.
 
-Without them the app raises on startup rather than serving degraded results.
-The test suite covers the pipeline end to end without them.
+**Known bugs, both frontend:**
+- `ProductCard` checks `price_tier` against `"mid-range"`, which the backend
+  never emits (it sends `"mid"`), so that badge never renders.
+- The streaming path never registers an `onDone` handler, so `timings_ms` and
+  `intent` arrive as `{}` on the client even though the backend sends both.
 
 ## Repository layout
 
 ```
-backend/app/        API, services, providers, schemas — the runtime path
-backend/scripts/    Offline profiling, verification, ingest
-backend/tests/      93 tests, no network, no API keys
+backend/app/        API, services, providers, schemas, db — the runtime path
+backend/scripts/    Profiling, verifiers, mock catalogue, provider check, seeding
+backend/data/       Source CSV (never committed), mock/ catalogue artifacts
+backend/eval/       queries.yaml — golden and unseen evaluation queries
 frontend/src/       React app
-docs/               Dataset analysis, taxonomy, plans and specs
+ATTRIBUTION.md      Dataset licence (ODC-By v1.0) and what it does not cover
+DEPLOYMENT.md       Render + Vercel plan, env, failure modes
+ARCHITECTURE.md     Runtime design and why each decision went this way
 ```
 
 ## Data
 
-The source CSV is 670 MB and is never committed. Licence terms and what may be
-redistributed are recorded in [docs/dataset.md](docs/dataset.md) §1.1 — the short
-version is that derived data ships only if the licence is permissive, otherwise
-only ASINs and our own generated text do.
+Source data is the [Amazon India Products 2023](https://www.kaggle.com/datasets/asaniczka/amazon-india-products-2023-1-5m-products)
+dataset, licensed **ODC-By v1.0** — permissive, attribution required, commercial
+use and derivative databases explicitly allowed.
+
+The licence covers the *database*, not copyright in the individual contents:
+product titles and images belong to their respective rights holders. No image
+files are stored. The 670 MB source CSV is never committed. Full detail, and the
+notices the licence requires, in [ATTRIBUTION.md](ATTRIBUTION.md).
+
+Products under `backend/data/mock/` are invented and contain no source data at
+all.

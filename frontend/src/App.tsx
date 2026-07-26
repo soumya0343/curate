@@ -53,6 +53,30 @@ export default function App() {
           <RefineBar onRefine={refine} busy={false} />
         </div>
       )}
+
+      {/* ODC-By 4.3: results are a Produced Work, so the source is named
+          wherever they are shown publicly, not only in the repository. */}
+      <footer className="mt-16 border-t border-slate-200 pt-4 text-xs text-slate-400">
+        Contains information from{" "}
+        <a
+          className="underline hover:text-slate-600"
+          href="https://www.kaggle.com/datasets/asaniczka/amazon-india-products-2023-1-5m-products"
+          target="_blank"
+          rel="noreferrer"
+        >
+          Amazon India Products 2023
+        </a>{" "}
+        which is made available under the{" "}
+        <a
+          className="underline hover:text-slate-600"
+          href="https://opendatacommons.org/licenses/by/1-0/"
+          target="_blank"
+          rel="noreferrer"
+        >
+          ODC Attribution License
+        </a>
+        . Product titles and images belong to their respective rights holders.
+      </footer>
     </main>
   );
 }

@@ -1,0 +1,17 @@
+Contains information from Amazon India Products 2023 (1.5M Products)
+  https://www.kaggle.com/datasets/asaniczka/amazon-india-products-2023-1-5m-products
+which is made available under the ODC Attribution License (ODC-By) v1.0
+  https://opendatacommons.org/licenses/by/1-0/
+
+catalogue.jsonl.gz and embeddings.npy in this directory are a Derivative
+Database of that dataset and are offered under the same licence. This notice
+lives here because gzipped JSONL has nowhere to put it (ODC-By 4.2 d).
+
+ODC-By covers rights in the database, not copyright in the individual contents
+(ODC-By 2.4). Product titles and images belong to their respective rights
+holders. No image files are stored here; products reference Amazon CDN URLs.
+
+mock/ contains invented products with fabricated ASINs and no data from the
+source dataset. This notice does not apply to it.
+
+Full detail: ../../ATTRIBUTION.md

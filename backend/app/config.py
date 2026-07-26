@@ -11,9 +11,24 @@ class Settings(BaseSettings):
 
     gemini_api_key: str | None = None
     groq_api_key: str | None = None
+    cerebras_api_key: str | None = None
+
+    # Plural forms hold several keys for one provider, comma-separated. Free
+    # tiers are what this project actually runs out of, so a rate limit rotates
+    # to the next key rather than failing the request. Singular and plural are
+    # merged by keys_for(); either spelling works.
+    gemini_api_keys: Annotated[list[str], NoDecode] = []
+    groq_api_keys: Annotated[list[str], NoDecode] = []
+    cerebras_api_keys: Annotated[list[str], NoDecode] = []
 
     generation_primary: str = "gemini"
     generation_fallback: str | None = "groq"
+    # Ordered chain, comma-separated: GENERATION_CHAIN=gemini,cerebras,groq.
+    # Overrides primary/fallback when set.
+    generation_chain: Annotated[list[str], NoDecode] = []
+
+    cerebras_model: str = "llama-3.3-70b"
+    cerebras_base_url: str = "https://api.cerebras.ai/v1"
 
     # Pinned. Changing either requires rebuilding catalogue embeddings.
     embedding_model: str = "gemini-embedding-001"
@@ -29,12 +44,37 @@ class Settings(BaseSettings):
     session_ttl_seconds: int = 1800
     llm_timeout_seconds: float = 30.0
 
-    @field_validator("cors_origins", mode="before")
+    @field_validator("cors_origins", "gemini_api_keys", "groq_api_keys",
+                     "cerebras_api_keys", "generation_chain", mode="before")
     @classmethod
-    def _split_origins(cls, v):
+    def _split_csv(cls, v):
         if isinstance(v, str):
-            return [o.strip() for o in v.split(",") if o.strip()]
+            return [item.strip() for item in v.split(",") if item.strip()]
         return v
+
+    def keys_for(self, provider: str) -> list[str]:
+        """Every key configured for a provider, singular and plural merged.
+
+        Order is preserved and duplicates are dropped downstream by KeyRing,
+        so setting GEMINI_API_KEY and GEMINI_API_KEYS with an overlap is safe.
+        """
+        single = getattr(self, f"{provider}_api_key", None)
+        plural = getattr(self, f"{provider}_api_keys", []) or []
+        return [k for k in ([single] if single else []) + list(plural) if k]
+
+    def generation_order(self) -> list[str]:
+        """The provider chain, longest-form setting winning.
+
+        GENERATION_CHAIN is the explicit form. Falling back to
+        primary + fallback keeps every existing deployment and .env working
+        unchanged.
+        """
+        if self.generation_chain:
+            return list(self.generation_chain)
+        order = [self.generation_primary]
+        if self.generation_fallback and self.generation_fallback != self.generation_primary:
+            order.append(self.generation_fallback)
+        return order
 
 
 @lru_cache

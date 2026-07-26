@@ -30,8 +30,13 @@ each field to its uppercased name unless told otherwise):
 | Variable | Config field | Default | Notes |
 |---|---|---|---|
 | `GEMINI_API_KEY` | `gemini_api_key` | `None` | Required for real embeddings — `_build_embedding` raises `ProviderUnavailable` if unset, because embeddings have no fallback provider (query vectors must share the catalogue's vector space). **Not required when `EMBEDDING_MODEL=hashing-bow-v1`**, the keyless lexical embedder used by the mock catalogue (§7). |
-| `GROQ_API_KEY` | `groq_api_key` | `None` | Required if `GENERATION_FALLBACK=groq` (the default) is to actually be usable; the fallback silently drops out if the key is missing. |
-| `GENERATION_PRIMARY` | `generation_primary` | `"gemini"` | `"gemini"`, `"groq"`, or `"mock"`. `mock` is the keyless rule-based provider — keyword matching, not a model — for demos and local runs (§7). |
+| `GROQ_API_KEY` | `groq_api_key` | `None` | Needed only if `groq` appears in the chain. A provider with no key is skipped, not fatal. |
+| `CEREBRAS_API_KEY` | `cerebras_api_key` | `None` | Same. Cerebras is called over its OpenAI-compatible HTTP API. |
+| `GEMINI_API_KEYS` / `GROQ_API_KEYS` / `CEREBRAS_API_KEYS` | `*_api_keys` | `[]` | Comma-separated. Several keys for one provider; a rate limit rotates to the next and retries. Merged with the singular form. |
+| `GENERATION_CHAIN` | `generation_chain` | unset | Ordered, comma-separated, e.g. `gemini,cerebras,groq`. Overrides the two settings below. |
+| `GENERATION_PRIMARY` | `generation_primary` | `"gemini"` | Legacy pair, used when `GENERATION_CHAIN` is unset. `"gemini"`, `"groq"`, `"cerebras"`, or `"mock"` — `mock` is the keyless rule-based provider (§7) and ends any chain it appears in. |
+| `CEREBRAS_MODEL` | `cerebras_model` | `"llama-3.3-70b"` | Configurable so a model rename is an env change, not a code change. |
+| `CEREBRAS_BASE_URL` | `cerebras_base_url` | `"https://api.cerebras.ai/v1"` | |
 | `GENERATION_FALLBACK` | `generation_fallback` | `"groq"` | Same constraint; set to empty/None to disable fallback. |
 | `EMBEDDING_MODEL` | `embedding_model` | `"gemini-embedding-001"` | **Pinned to whatever built the committed embeddings.** Changing it without rebuilding `embeddings.npy` trips `ManifestMismatch` (`app/catalogue/index.py:49-53`) by design — do not "fix" that check. |
 | `EMBEDDING_DIMS` | `embedding_dims` | `768` | Same constraint, checked at `app/catalogue/index.py:54-56`. |
@@ -159,6 +164,23 @@ shows a CORS error on the production frontend while previews work fine. Fix:
 add the exact production origin to `CORS_ORIGINS` and redeploy the backend
 (env var changes require a redeploy to take effect, since `Settings` is
 constructed once via `get_settings()`'s `lru_cache`).
+
+### (b2) Rate limits, and what the client sees
+
+Free tiers are the limit this project reaches first. Two mechanisms cover it,
+and they are not the same thing:
+
+- **Key rotation** — several keys for one provider, advanced on a 429 and
+  retried. Same model, same vector space, invisible to correctness. This is why
+  embeddings may rotate keys but must never change provider.
+- **The provider chain** — `GENERATION_CHAIN=gemini,cerebras,groq`, tried in
+  order. Generation only.
+
+When every key on every provider has refused, the API returns **429
+`RATE_LIMITED` with `retryable: true`**, not a 503. A client can act on that
+difference; a generic failure hides it. Anything that is not a rate limit — a
+revoked key, a bad model name — fails immediately without rotating, because it
+would fail identically on every key and burn the whole ring discovering that.
 
 ### (c) A proxy buffering the SSE stream
 

@@ -2,8 +2,9 @@ import json
 import re
 from typing import Protocol
 
-from app.core.errors import ProviderUnavailable
+from app.core.errors import ProviderUnavailable, RateLimited
 from app.core.logging import log_stage
+from app.providers.keys import KeyRing, call_with_rotation, is_rate_limited
 
 
 class GenerationProvider(Protocol):
@@ -227,69 +228,173 @@ class MockGeneration:
         return sentence
 
 
+def parse_json_response(text: str) -> dict:
+    """Parse a model's JSON reply, tolerating the wrappers models add.
+
+    Every provider here is asked for JSON and most honour it exactly. Some
+    OpenAI-compatible endpoints still return it inside ``` fences or with a
+    sentence in front. Failing the whole request on a stray backtick would be a
+    worse outcome than slicing to the outermost braces.
+    """
+    text = (text or "").strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```[a-zA-Z]*\n?|\n?```$", "", text).strip()
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        start, end = text.find("{"), text.rfind("}")
+        if start == -1 or end <= start:
+            raise
+        return json.loads(text[start:end + 1])
+
+
 class GeminiGeneration:
     name = "gemini"
 
-    def __init__(self, api_key: str, model: str = "gemini-2.5-flash",
+    def __init__(self, api_keys: str | list[str], model: str = "gemini-2.5-flash",
                  timeout: float = 30.0) -> None:
-        from google import genai
-        self._client = genai.Client(api_key=api_key)
+        self._ring = KeyRing(api_keys)
         self._model = model
         self._timeout = timeout
+        self._clients: dict[str, object] = {}
+
+    def _client(self, api_key: str):
+        # Built per key and cached: the SDK binds its credential at construction,
+        # so rotating means a different client, not a mutated one.
+        if api_key not in self._clients:
+            from google import genai
+            self._clients[api_key] = genai.Client(api_key=api_key)
+        return self._clients[api_key]
 
     async def generate_json(self, prompt: str, *, request_id: str) -> dict:
-        resp = await self._client.aio.models.generate_content(
-            model=self._model, contents=prompt,
-            config={"response_mime_type": "application/json", "temperature": 0.2},
-        )
-        return json.loads(resp.text)
+        async def call(api_key: str) -> dict:
+            resp = await self._client(api_key).aio.models.generate_content(
+                model=self._model, contents=prompt,
+                config={"response_mime_type": "application/json", "temperature": 0.2},
+            )
+            return parse_json_response(resp.text)
+
+        return await call_with_rotation(self._ring, call, request_id=request_id,
+                                        provider=self.name)
 
 
 class GroqGeneration:
     name = "groq"
 
-    def __init__(self, api_key: str, model: str = "llama-3.3-70b-versatile",
+    def __init__(self, api_keys: str | list[str],
+                 model: str = "llama-3.3-70b-versatile",
                  timeout: float = 30.0) -> None:
-        from groq import AsyncGroq
-        self._client = AsyncGroq(api_key=api_key, timeout=timeout)
+        self._ring = KeyRing(api_keys)
         self._model = model
+        self._timeout = timeout
+        self._clients: dict[str, object] = {}
+
+    def _client(self, api_key: str):
+        if api_key not in self._clients:
+            from groq import AsyncGroq
+            self._clients[api_key] = AsyncGroq(api_key=api_key, timeout=self._timeout)
+        return self._clients[api_key]
 
     async def generate_json(self, prompt: str, *, request_id: str) -> dict:
-        resp = await self._client.chat.completions.create(
-            model=self._model,
-            messages=[{"role": "user", "content": prompt}],
-            response_format={"type": "json_object"},
-            temperature=0.2,
-        )
-        return json.loads(resp.choices[0].message.content)
+        async def call(api_key: str) -> dict:
+            resp = await self._client(api_key).chat.completions.create(
+                model=self._model,
+                messages=[{"role": "user", "content": prompt}],
+                response_format={"type": "json_object"},
+                temperature=0.2,
+            )
+            return parse_json_response(resp.choices[0].message.content)
+
+        return await call_with_rotation(self._ring, call, request_id=request_id,
+                                        provider=self.name)
+
+
+class CerebrasGeneration:
+    """Cerebras Inference, over its OpenAI-compatible HTTP API.
+
+    Called with httpx rather than the vendor SDK: the endpoint is a plain
+    `POST /chat/completions`, httpx is already a dependency, and one less SDK is
+    one less place for a client-construction difference to hide. `base_url` and
+    `model` stay configurable so a model rename does not require a code change.
+    """
+
+    name = "cerebras"
+
+    def __init__(self, api_keys: str | list[str], model: str = "llama-3.3-70b",
+                 base_url: str = "https://api.cerebras.ai/v1",
+                 timeout: float = 30.0) -> None:
+        self._ring = KeyRing(api_keys)
+        self._model = model
+        self._base_url = base_url.rstrip("/")
+        self._timeout = timeout
+
+    async def generate_json(self, prompt: str, *, request_id: str) -> dict:
+        import httpx
+
+        async def call(api_key: str) -> dict:
+            async with httpx.AsyncClient(timeout=self._timeout) as client:
+                resp = await client.post(
+                    f"{self._base_url}/chat/completions",
+                    headers={"Authorization": f"Bearer {api_key}"},
+                    json={
+                        "model": self._model,
+                        "messages": [{"role": "user", "content": prompt}],
+                        "response_format": {"type": "json_object"},
+                        "temperature": 0.2,
+                    },
+                )
+                # raise_for_status carries the 429 the rotation logic looks for.
+                resp.raise_for_status()
+                payload = resp.json()
+            return parse_json_response(payload["choices"][0]["message"]["content"])
+
+        return await call_with_rotation(self._ring, call, request_id=request_id,
+                                        provider=self.name)
 
 
 class FallbackChain:
-    """Primary -> one fallback -> ProviderUnavailable.
+    """Try each provider in order; raise when all of them have failed.
 
-    Deliberately two providers, not three: each additional provider multiplies
-    prompt-compatibility testing across differing structured-output support and
-    error semantics (spec 3.2).
+    The original design capped this at two providers, because every extra one
+    multiplies prompt-compatibility testing across differing structured-output
+    support and error semantics (spec 3.2). That cost is real and has not gone
+    away - the JSON-wrapper tolerance in `parse_json_response` exists because of
+    it. The chain is open-ended now because free-tier rate limits, not provider
+    outages, are what actually stops this application, and a third provider is
+    the cheapest answer to that.
+
+    Rate limits are distinguished from failures: if every provider refused on
+    quota, the caller gets `RateLimited` (429, retryable) rather than
+    `ProviderUnavailable` (503). "Come back shortly" and "this is broken" are
+    different messages and a client can act on the difference.
     """
 
     name = "chain"
 
-    def __init__(self, primary: GenerationProvider,
-                 fallback: GenerationProvider | None) -> None:
-        self.primary = primary
-        self.fallback = fallback
+    def __init__(self, *providers: GenerationProvider | None) -> None:
+        self.providers = [p for p in providers if p is not None]
+        if not self.providers:
+            raise ValueError("FallbackChain needs at least one provider")
+
+    @property
+    def primary(self) -> GenerationProvider:
+        return self.providers[0]
 
     async def generate_json(self, prompt: str, *, request_id: str) -> dict:
-        try:
-            return await self.primary.generate_json(prompt, request_id=request_id)
-        except Exception as exc:  # noqa: BLE001 - any provider failure triggers fallback
-            log_stage(request_id, "provider_failover",
-                      provider=self.primary.name, error=str(exc)[:200])
-            if self.fallback is None:
-                raise ProviderUnavailable(f"{self.primary.name} failed: {exc}") from exc
+        errors: list[str] = []
+        all_rate_limited = True
 
-        try:
-            return await self.fallback.generate_json(prompt, request_id=request_id)
-        except Exception as exc:  # noqa: BLE001
-            raise ProviderUnavailable(
-                f"both {self.primary.name} and {self.fallback.name} failed: {exc}") from exc
+        for provider in self.providers:
+            try:
+                return await provider.generate_json(prompt, request_id=request_id)
+            except Exception as exc:  # noqa: BLE001 - any failure moves to the next
+                if not is_rate_limited(exc):
+                    all_rate_limited = False
+                errors.append(f"{provider.name}: {str(exc)[:120]}")
+                log_stage(request_id, "provider_failover", provider=provider.name,
+                          rate_limited=is_rate_limited(exc), error=str(exc)[:200])
+
+        summary = "; ".join(errors)
+        if all_rate_limited:
+            raise RateLimited(f"every provider is rate limited ({summary})")
+        raise ProviderUnavailable(f"all {len(self.providers)} providers failed: {summary}")

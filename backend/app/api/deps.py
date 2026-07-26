@@ -5,9 +5,9 @@ from app.config import Settings, get_settings
 from app.core.errors import ProviderUnavailable
 from app.providers.embedding import (EmbeddingProvider, GeminiEmbedding,
                                      HashingEmbedding)
-from app.providers.generation import (FallbackChain, GeminiGeneration,
-                                      GenerationProvider, GroqGeneration,
-                                      MockGeneration)
+from app.providers.generation import (CerebrasGeneration, FallbackChain,
+                                      GeminiGeneration, GenerationProvider,
+                                      GroqGeneration, MockGeneration)
 from app.services.pipeline import RecommendationPipeline
 from app.services.sessions import SessionStore
 
@@ -15,31 +15,48 @@ _sessions: SessionStore | None = None
 
 
 def _build_generation(settings: Settings) -> GenerationProvider:
+    """Assemble the generation chain named by GENERATION_CHAIN (or the legacy
+    primary + fallback pair).
+
+    A provider with no key is skipped rather than raising: a chain of
+    gemini,cerebras,groq should still start for someone who only holds two of
+    the three. Only an empty chain is an error, and it names what is missing.
+    """
+    timeout = settings.llm_timeout_seconds
     builders = {
-        "gemini": lambda: GeminiGeneration(settings.gemini_api_key,
-                                           timeout=settings.llm_timeout_seconds),
-        "groq": lambda: GroqGeneration(settings.groq_api_key,
-                                       timeout=settings.llm_timeout_seconds),
-        "mock": MockGeneration,
+        "gemini": lambda keys: GeminiGeneration(keys, timeout=timeout),
+        "groq": lambda keys: GroqGeneration(keys, timeout=timeout),
+        "cerebras": lambda keys: CerebrasGeneration(
+            keys, model=settings.cerebras_model,
+            base_url=settings.cerebras_base_url, timeout=timeout),
     }
-    # GENERATION_PRIMARY=mock runs the rule-based provider, which needs no key.
-    # It exists for demos and local development against the synthetic catalogue;
-    # it matches keywords rather than reading a request.
-    if settings.generation_primary == "mock":
-        return MockGeneration()
 
-    keys = {"gemini": settings.gemini_api_key, "groq": settings.groq_api_key}
+    order = settings.generation_order()
 
-    if not keys.get(settings.generation_primary):
+    # mock is the keyless rule-based provider: keyword matching, not a model.
+    # It ends any chain it appears in, since it never fails and never rate
+    # limits - anything after it would be unreachable.
+    providers: list[GenerationProvider] = []
+    missing: list[str] = []
+    for name in order:
+        if name == "mock":
+            providers.append(MockGeneration())
+            break
+        builder = builders.get(name)
+        if builder is None:
+            raise ProviderUnavailable(f"unknown generation provider {name!r}")
+        keys = settings.keys_for(name)
+        if keys:
+            providers.append(builder(keys))
+        else:
+            missing.append(name)
+
+    if not providers:
         raise ProviderUnavailable(
-            f"no API key configured for primary provider {settings.generation_primary!r}")
+            f"no API key configured for any provider in the chain {order} "
+            f"(missing keys: {', '.join(missing) or 'all'})")
 
-    primary = builders[settings.generation_primary]()
-    fallback = None
-    name = settings.generation_fallback
-    if name and name != settings.generation_primary and keys.get(name):
-        fallback = builders[name]()
-    return FallbackChain(primary, fallback)
+    return FallbackChain(*providers)
 
 
 def _build_embedding(settings: Settings) -> EmbeddingProvider:
@@ -54,10 +71,12 @@ def _build_embedding(settings: Settings) -> EmbeddingProvider:
         # Keyless lexical embeddings, for the synthetic catalogue and local runs.
         return HashingEmbedding(dims=settings.embedding_dims)
 
-    if not settings.gemini_api_key:
+    keys = settings.keys_for("gemini")
+    if not keys:
         raise ProviderUnavailable("GEMINI_API_KEY is required for embeddings")
-    return GeminiEmbedding(settings.gemini_api_key, settings.embedding_model,
-                           settings.embedding_dims)
+    # Several keys rotate on a rate limit; the model never changes, so every
+    # vector still lands in the catalogue's space.
+    return GeminiEmbedding(keys, settings.embedding_model, settings.embedding_dims)
 
 
 @lru_cache

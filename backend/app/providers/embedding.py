@@ -15,6 +15,8 @@ from typing import Protocol
 
 import numpy as np
 
+from app.providers.keys import KeyRing, call_with_rotation
+
 
 class EmbeddingProvider(Protocol):
     model: str
@@ -24,19 +26,39 @@ class EmbeddingProvider(Protocol):
 
 
 class GeminiEmbedding:
-    def __init__(self, api_key: str, model: str, dims: int) -> None:
-        from google import genai
-        self._client = genai.Client(api_key=api_key)
+    """Gemini embeddings, with key rotation but never provider fallback.
+
+    The distinction is the whole point: a second KEY is the same model producing
+    vectors in the same space, so rotating is invisible to correctness. A second
+    PROVIDER is a different space, where cosine still returns plausible numbers
+    and every result is noise (spec 3.1). Rate limits are worth surviving;
+    silently wrong retrieval is not.
+    """
+
+    def __init__(self, api_keys: str | list[str], model: str, dims: int) -> None:
+        self._ring = KeyRing(api_keys)
         self.model = model
         self.dims = dims
+        self._clients: dict[str, object] = {}
+
+    def _client(self, api_key: str):
+        if api_key not in self._clients:
+            from google import genai
+            self._clients[api_key] = genai.Client(api_key=api_key)
+        return self._clients[api_key]
 
     async def embed(self, texts: list[str]) -> np.ndarray:
-        resp = await self._client.aio.models.embed_content(
-            model=self.model, contents=texts,
-            config={"output_dimensionality": self.dims, "task_type": "RETRIEVAL_QUERY"},
-        )
-        matrix = np.asarray([e.values for e in resp.embeddings], dtype=np.float32)
-        return matrix / np.linalg.norm(matrix, axis=1, keepdims=True)
+        async def call(api_key: str) -> np.ndarray:
+            resp = await self._client(api_key).aio.models.embed_content(
+                model=self.model, contents=texts,
+                config={"output_dimensionality": self.dims,
+                        "task_type": "RETRIEVAL_QUERY"},
+            )
+            matrix = np.asarray([e.values for e in resp.embeddings], dtype=np.float32)
+            return matrix / np.linalg.norm(matrix, axis=1, keepdims=True)
+
+        return await call_with_rotation(self._ring, call, request_id="embed",
+                                        provider="gemini-embedding")
 
 
 class HashingEmbedding:

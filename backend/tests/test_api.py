@@ -167,3 +167,25 @@ def test_provider_failure_returns_503_error_envelope(tmp_path):
     r = failing_client.post("/api/recommend", json={"query": "trekking gear"})
     assert r.status_code == 503
     assert r.json()["error"]["code"] == "PROVIDER_UNAVAILABLE"
+
+
+class _RateLimitedProvider:
+    """Every key on every provider refused on quota."""
+
+    name = "limited"
+
+    async def generate_json(self, prompt: str, *, request_id: str) -> dict:
+        raise RuntimeError("429 rate limit reached for model")
+
+
+def test_exhausted_rate_limits_return_429_and_are_marked_retryable(tmp_path):
+    """A quota pause and a broken provider are different answers: one says come
+    back shortly, the other says this is not going to work."""
+    generator = FallbackChain(_RateLimitedProvider(), _RateLimitedProvider())
+    limited_client = _client_with_generator(tmp_path, generator)
+
+    r = limited_client.post("/api/recommend", json={"query": "trekking gear"})
+    assert r.status_code == 429
+    body = r.json()["error"]
+    assert body["code"] == "RATE_LIMITED"
+    assert body["retryable"] is True

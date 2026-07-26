@@ -1,0 +1,10 @@
+{
+  "model": "hashing-bow-v1",
+  "dims": 256,
+  "count": 79,
+  "normalised": true,
+  "dtype": "float16",
+  "built": "2026-07-26",
+  "synthetic": true,
+  "note": "Invented products with fabricated ASINs, for running the application without the real pipeline. Not evidence of retrieval quality."
+}

@@ -44,6 +44,8 @@ from app.providers.embedding import HashingEmbedding  # noqa: E402
 from scripts.verify_attributes import TIER_B_FIELDS, verify  # noqa: E402
 
 DIMS = 256
+GEMINI_MODEL = "gemini-embedding-001"
+GEMINI_DIMS = 768
 OUT_DIR = Path("data/mock")
 IMAGE_PLACEHOLDER = "https://placehold.co/400x400/eeeeee/555555?text="
 
@@ -282,22 +284,55 @@ def build() -> list[dict]:
     return products
 
 
-def write(products: list[dict], out_dir: Path, dims: int = DIMS) -> None:
+def _gemini_matrix(texts: list[str], model: str, dims: int) -> np.ndarray:
+    """Embed with the real provider, when a key is available.
+
+    Worth the API call: the hashing embedder has no IDF, so a title sharing
+    "cotton" or "women" scores as highly as one sharing "thermal", and searching
+    "thermal base layer" surfaces sarees. Real embeddings remove the one part of
+    the mock stack that misrepresents how retrieval behaves.
+    """
+    import asyncio
+
+    from app.config import get_settings
+    from app.providers.embedding import GeminiEmbedding
+
+    keys = get_settings().keys_for("gemini")
+    if not keys:
+        raise SystemExit("--embedder gemini needs GEMINI_API_KEY")
+
+    embedder = GeminiEmbedding(keys, model, dims)
+
+    async def run() -> np.ndarray:
+        # Batched: one request per 100 texts, well inside the payload limit.
+        chunks = [texts[i:i + 100] for i in range(0, len(texts), 100)]
+        return np.vstack([await embedder.embed(chunk) for chunk in chunks])
+
+    return asyncio.run(run())
+
+
+def write(products: list[dict], out_dir: Path, dims: int = DIMS,
+          embedder: str = "hashing") -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     with gzip.open(out_dir / "catalogue.jsonl.gz", "wt", encoding="utf-8") as f:
         for p in products:
             f.write(json.dumps(p, ensure_ascii=False) + "\n")
 
-    embedder = HashingEmbedding(dims=dims)
-    matrix = embedder.encode([searchable_text(p) for p in products])
+    texts = [searchable_text(p) for p in products]
+    if embedder == "gemini":
+        model, dims = GEMINI_MODEL, GEMINI_DIMS
+        matrix = _gemini_matrix(texts, model, dims)
+    else:
+        model = HashingEmbedding.model
+        matrix = HashingEmbedding(dims=dims).encode(texts)
     np.save(out_dir / "embeddings.npy", matrix.astype(np.float16))
 
     # Line order in the JSONL is row order in the matrix. The manifest is what
     # makes a mismatch impossible to express silently - load_index refuses to
     # start unless the configured model and dims match these.
     (out_dir / "embeddings.manifest.json").write_text(json.dumps({
-        "model": embedder.model,
+        "model": model,
         "dims": dims,
         "count": len(products),
         "normalised": True,
@@ -311,9 +346,19 @@ def write(products: list[dict], out_dir: Path, dims: int = DIMS) -> None:
 
 
 if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--embedder", choices=["hashing", "gemini"], default="hashing",
+                        help="hashing needs no key; gemini needs GEMINI_API_KEY and "
+                             "gives real semantic retrieval")
+    parser.add_argument("--out", type=Path, default=OUT_DIR)
+    args = parser.parse_args()
+
     catalogue = build()
-    write(catalogue, OUT_DIR)
+    write(catalogue, args.out, embedder=args.embedder)
     tiers = collections.Counter(p["price_tier"] for p in catalogue)
     print(f"wrote {len(catalogue)} products across "
-          f"{len({p['category'] for p in catalogue})} categories to {OUT_DIR}")
+          f"{len({p['category'] for p in catalogue})} categories to {args.out} "
+          f"({args.embedder} embeddings)")
     print(f"price tiers: {dict(tiers)}")

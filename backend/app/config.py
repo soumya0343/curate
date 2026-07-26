@@ -33,7 +33,14 @@ class Settings(BaseSettings):
     # Overrides primary/fallback when set.
     generation_chain: Annotated[list[str], NoDecode] = []
 
-    cerebras_model: str = "llama-3.3-70b"
+    # Model ids drift, and a retired one fails at the first real request while
+    # every offline test still passes. Two of these broke within a day of being
+    # written, so all four are settings rather than constructor defaults.
+    # `-latest` aliases are preferred where a provider offers them.
+    gemini_model: str = "gemini-flash-latest"
+    groq_model: str = "llama-3.3-70b-versatile"
+
+    cerebras_model: str = "gpt-oss-120b"
     cerebras_base_url: str = "https://api.cerebras.ai/v1"
 
     github_model: str = "openai/gpt-4o-mini"

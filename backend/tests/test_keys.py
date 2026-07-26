@@ -53,6 +53,19 @@ def test_ring_accepts_a_bare_string():
     assert len(KeyRing("only-one")) == 1
 
 
+def test_ring_splits_a_comma_separated_string():
+    """Putting the list in GEMINI_API_KEY rather than GEMINI_API_KEYS is the
+    obvious mistake to make. Read as one key it becomes a bearer token of three
+    concatenated keys, which 401s everywhere at once."""
+    ring = KeyRing("key1,key2,key3")
+    assert len(ring) == 3
+    assert ring.current == "key1"
+
+
+def test_ring_splits_commas_inside_a_list_too():
+    assert len(KeyRing(["key1,key2", "key3"])) == 3
+
+
 def test_ring_wraps_around():
     ring = KeyRing(["a", "b"])
     assert ring.current == "a"
@@ -220,13 +233,13 @@ async def test_cerebras_posts_openai_shaped_request_and_rotates(monkeypatch):
     seen: list[dict] = []
     _record_http(monkeypatch, seen, limit_first=True)
 
-    provider = CerebrasGeneration(["key1", "key2"], model="llama-3.3-70b")
+    provider = CerebrasGeneration(["key1", "key2"], model="gpt-oss-120b")
     assert await provider.generate_json("prompt", request_id="r") == {"groups": []}
 
     assert [r["auth"] for r in seen] == ["Bearer key1", "Bearer key2"]
     assert seen[-1]["url"] == "https://api.cerebras.ai/v1/chat/completions"
     body = seen[-1]["body"]
-    assert body["model"] == "llama-3.3-70b"
+    assert body["model"] == "gpt-oss-120b"
     assert body["response_format"] == {"type": "json_object"}
     assert body["messages"] == [{"role": "user", "content": "prompt"}]
 
@@ -271,6 +284,24 @@ def test_keys_for_merges_singular_and_plural(monkeypatch):
 def test_generation_chain_overrides_primary_and_fallback(monkeypatch):
     monkeypatch.setenv("GENERATION_CHAIN", "gemini,cerebras,groq")
     assert Settings().generation_order() == ["gemini", "cerebras", "groq"]
+
+
+def test_every_provider_model_is_configurable(monkeypatch):
+    """Model ids drift and a retired one fails only at the first real request,
+    long after every offline test has passed. Two broke within a day of being
+    written, so none of them may be hardcoded."""
+    from app.api import deps
+
+    for var, value in [("GEMINI_MODEL", "m-gemini"), ("GROQ_MODEL", "m-groq"),
+                       ("CEREBRAS_MODEL", "m-cerebras"), ("GITHUB_MODEL", "m-github"),
+                       ("GENERATION_CHAIN", "gemini,groq,cerebras,github"),
+                       ("GEMINI_API_KEY", "k"), ("GROQ_API_KEY", "k"),
+                       ("CEREBRAS_API_KEY", "k"), ("GITHUB_TOKEN", "k")]:
+        monkeypatch.setenv(var, value)
+
+    chain = deps._build_generation(Settings())
+    assert [p._model for p in chain.providers] == [
+        "m-gemini", "m-groq", "m-cerebras", "m-github"]
 
 
 def test_github_credentials_are_tokens_not_api_keys(monkeypatch):

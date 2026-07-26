@@ -251,7 +251,7 @@ def parse_json_response(text: str) -> dict:
 class GeminiGeneration:
     name = "gemini"
 
-    def __init__(self, api_keys: str | list[str], model: str = "gemini-2.5-flash",
+    def __init__(self, api_keys: str | list[str], model: str = "gemini-flash-latest",
                  timeout: float = 30.0) -> None:
         self._ring = KeyRing(api_keys)
         self._model = model
@@ -354,7 +354,7 @@ class OpenAICompatibleGeneration:
 class CerebrasGeneration(OpenAICompatibleGeneration):
     name = "cerebras"
 
-    def __init__(self, api_keys: str | list[str], model: str = "llama-3.3-70b",
+    def __init__(self, api_keys: str | list[str], model: str = "gpt-oss-120b",
                  base_url: str = "https://api.cerebras.ai/v1",
                  timeout: float = 30.0) -> None:
         super().__init__(api_keys, model=model, base_url=base_url, timeout=timeout)

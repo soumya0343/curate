@@ -57,7 +57,13 @@ class KeyRing:
         if keys is None:
             keys = []
         if isinstance(keys, str):
+            # A comma in a single credential is always several credentials:
+            # no provider issues keys containing one, and putting a list in
+            # GEMINI_API_KEY rather than GEMINI_API_KEYS is the obvious thing
+            # to do. Treating it as one opaque key sends the whole blob as a
+            # bearer token and 401s on every provider at once.
             keys = [keys]
+        keys = [part for key in keys for part in str(key).split(",")]
 
         seen: set[str] = set()
         self._keys: list[str] = []

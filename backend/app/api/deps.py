@@ -25,8 +25,10 @@ def _build_generation(settings: Settings) -> GenerationProvider:
     """
     timeout = settings.llm_timeout_seconds
     builders = {
-        "gemini": lambda keys: GeminiGeneration(keys, timeout=timeout),
-        "groq": lambda keys: GroqGeneration(keys, timeout=timeout),
+        "gemini": lambda keys: GeminiGeneration(keys, model=settings.gemini_model,
+                                                timeout=timeout),
+        "groq": lambda keys: GroqGeneration(keys, model=settings.groq_model,
+                                            timeout=timeout),
         "cerebras": lambda keys: CerebrasGeneration(
             keys, model=settings.cerebras_model,
             base_url=settings.cerebras_base_url, timeout=timeout),

@@ -1,0 +1,50 @@
+# Golden queries are the assignment's examples. Unseen queries exist to show the
+# architecture generalises rather than being engineered to pass three known cases
+# (spec principle 1). The automated harness that runs these is v2.
+
+golden:
+  - id: trek-hampta
+    domain: outdoor
+    query: >-
+      I am going for a trek to Hampta Pass in the last week of October for one
+      week. Please find me trekking essentials and clothing.
+    expect: multiple groups covering clothing and gear; empty groups are acceptable
+      where the catalogue is genuinely thin (sleeping bags, trekking poles)
+  - id: wedding-traditional
+    domain: apparel
+    query: Find me good traditional wear for my friend's wedding in March next year.
+    expect: ethnic wear groups; a clarifying question about who it is for is reasonable
+  - id: anniversary-gift
+    domain: gifting
+    query: I need a premium gifting hamper for my parents' 25th anniversary next month.
+    expect: several gift categories at the premium or luxury price tier
+
+unseen:
+  - id: office-headphones
+    domain: electronics
+    query: wireless headphones for office calls under Rs 5,000
+    expect: budget filter applied as a hard cut; no item above Rs 5,000
+  - id: home-workout
+    domain: fitness
+    query: beginner home workout equipment
+    expect: several distinct equipment groups, not one undifferentiated list
+  - id: new-apartment-gift
+    domain: home
+    query: a useful gift for someone moving into a new apartment
+    expect: home and kitchen groups; assumptions surfaced about budget
+  - id: walking-shoes
+    domain: footwear
+    query: comfortable shoes for daily walking
+    expect: a single well-populated group; simple queries should not be over-decomposed
+  - id: wfh-desk
+    domain: office
+    query: desk accessories for working from home
+    expect: multiple small accessory groups
+  - id: badminton-beginner
+    domain: sports
+    query: badminton equipment for a beginner
+    expect: racquets and shuttles; beginner framing reflected in price tier
+  - id: five-day-travel
+    domain: travel
+    query: travel essentials for a five-day trip
+    expect: luggage and accessories; duration reflected in the assumptions

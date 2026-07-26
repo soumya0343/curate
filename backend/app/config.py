@@ -59,6 +59,7 @@ class Settings(BaseSettings):
 
     session_ttl_seconds: int = 1800
     llm_timeout_seconds: float = 30.0
+    database_url: str = "postgresql://postgres:postgres@localhost:5432/catalogue"
 
     @field_validator("cors_origins", "gemini_api_keys", "groq_api_keys",
                      "cerebras_api_keys", "github_tokens", "generation_chain",

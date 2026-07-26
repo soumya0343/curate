@@ -168,10 +168,16 @@ def test_price_tiers_are_cohort_relative(mock_dir):
     assert {p["price_tier"] for p in products} == {"budget", "mid", "premium", "luxury"}
 
 
-def test_structural_url_invariant_holds(mock_dir):
+def test_mock_products_link_to_a_search_not_a_fabricated_asin(mock_dir):
+    """The real catalogue's invariant is `product_url == /dp/{asin}`, checked by
+    `scripts/validate_urls.assert_structure`. Mock ASINs are invented, so that
+    URL would 404 on every card. Linking to an Amazon search for the title
+    resolves to something real, which is the honest option for fabricated data —
+    and it is why the structural check must not be pointed at this catalogue."""
     for line in gzip.open(mock_dir / "catalogue.jsonl.gz", "rt", encoding="utf-8"):
         product = json.loads(line)
-        assert product["product_url"] == f"https://www.amazon.in/dp/{product['id']}"
+        assert product["product_url"].startswith("https://www.amazon.in/s?k=")
+        assert product["id"] not in product["product_url"]
 
 
 # --- end to end, no keys ------------------------------------------------

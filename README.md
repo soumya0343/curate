@@ -7,6 +7,10 @@ product recommendations grouped by need, each with a one-sentence reason it fits
 The catalogue is derived from Amazon India product data (1.59M source rows).
 Licence and attribution: [ATTRIBUTION.md](ATTRIBUTION.md).
 
+**Live demo:** https://curate--app.vercel.app/ (frontend, Vercel) —
+backend at https://curate-inn6.onrender.com (Render), both deployed from
+`master`. See [DEPLOYMENT.md](DEPLOYMENT.md) for the full deployment writeup.
+
 ## What makes it different from a search box
 
 **It splits the request into sub-needs.** "Trekking essentials and clothing" is

@@ -5,6 +5,7 @@ import { WishlistProvider } from "./contexts/WishlistContext";
 import { TopNavBar } from "./components/TopNavBar";
 import { DiscoverPage } from "./pages/DiscoverPage";
 import { ExplorePage } from "./pages/ExplorePage";
+import { WishlistPage } from "./pages/WishlistPage";
 
 export default function App() {
   return (
@@ -16,6 +17,7 @@ export default function App() {
             <Routes>
               <Route path="/" element={<DiscoverPage />} />
               <Route path="/explore" element={<ExplorePage />} />
+              <Route path="/wishlist" element={<WishlistPage />} />
             </Routes>
           </div>
         </BrowserRouter>

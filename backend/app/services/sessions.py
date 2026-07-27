@@ -25,6 +25,10 @@ class SessionState:
     # this isn't kept, and the model can relabel or misclassify a category it
     # already got right (e.g. backpacks sliding into "Trekking Clothing").
     sub_needs: list[SubNeed] = field(default_factory=list)
+    # Consecutive turns where the clarity gate fired without retrieval running.
+    # Capped at 2 — on the third unclear turn we force generation anyway so the
+    # user can never get stuck in an infinite question loop.
+    stalled_turns: int = 0
 
 
 class SessionStore:
@@ -37,10 +41,12 @@ class SessionStore:
 
     def put(self, session_id: str, intent: ShoppingIntent,
             history: list[str] | None = None,
-            sub_needs: list[SubNeed] | None = None) -> None:
+            sub_needs: list[SubNeed] | None = None,
+            stalled_turns: int = 0) -> None:
         self._data[session_id] = (
             time.monotonic(),
-            SessionState(intent=intent, history=history or [], sub_needs=sub_needs or []))
+            SessionState(intent=intent, history=history or [], sub_needs=sub_needs or [],
+                         stalled_turns=stalled_turns))
 
     def get(self, session_id: str) -> SessionState | None:
         entry = self._data.get(session_id)

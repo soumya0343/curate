@@ -40,6 +40,7 @@ class RecommendResponse(BaseModel):
     groups: list[ResultGroup] = []
     relaxations: list[str] = []
     timings_ms: dict[str, float] = {}
+    awaiting_clarification: bool = False
 
 
 class StreamEvent(BaseModel):

@@ -17,6 +17,7 @@ export function DiscoverPage() {
   ];
 
   const isActive = stage !== "idle";
+  const isLoading = status === "loading";
 
   return (
     <div className="mx-auto max-w-7xl px-4 py-10 lg:flex lg:gap-10 lg:px-8">
@@ -41,7 +42,7 @@ export function DiscoverPage() {
 
         {/* Prompt bar */}
         <div className={isActive ? "mb-8" : "mx-auto max-w-xl mb-10"}>
-          <InputPanel onSubmit={submit} busy={status === "loading"} />
+          <InputPanel onSubmit={submit} busy={isLoading} />
         </div>
 
         {/* Error */}
@@ -90,8 +91,8 @@ export function DiscoverPage() {
 
         {/* Results — stay visible (dimmed) while a follow-up is loading, rather
             than disappearing the instant a new request starts */}
-        {response && (
-          <div className={status === "loading" ? "pointer-events-none opacity-40 transition-opacity" : ""}>
+        {response && !response.awaiting_clarification && (
+          <div className={isLoading ? "pointer-events-none opacity-40 transition-opacity" : ""}>
             {status === "ready" && (
               <>
                 <AssumptionChips
@@ -101,7 +102,7 @@ export function DiscoverPage() {
                   ]}
                   questions={response.clarifying_questions}
                   onAnswer={refine}
-                  refineBar={<RefineBar onRefine={refine} busy={status === "loading"} />}
+                  refineBar={<RefineBar onRefine={refine} busy={isLoading} />}
                 />
                 {response.clarifying_questions.length > 0 && (
                   <p className="mb-4 text-sm text-primary/50">

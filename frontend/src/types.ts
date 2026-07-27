@@ -35,6 +35,7 @@ export interface RecommendResponse {
   groups: ResultGroup[];
   relaxations: string[];
   timings_ms: Record<string, number>;
+  awaiting_clarification: boolean;
 }
 
 export interface ApiError {

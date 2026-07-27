@@ -28,6 +28,7 @@ export function useRecommendation() {
           intent: data.intent,
           assumptions: data.assumptions,
           clarifying_questions: data.clarifying_questions,
+          awaiting_clarification: data.awaiting_clarification ?? false,
         } as Partial<RecommendResponse>);
         setStage("searching");
       },

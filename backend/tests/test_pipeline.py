@@ -158,3 +158,72 @@ async def test_unexpected_exception_never_leaks_internals(index):
     assert events[-1].event == "error"
     assert events[-1].data["error"]["code"] == "INTERNAL"
     assert "hunter2" not in json.dumps(events[-1].data)
+
+
+# --- Clarity gate tests ---
+
+VAGUE_PAYLOAD = {
+    "intent": {}, "sub_needs": [],
+    "assumptions": [],
+    "clarifying_questions": ["Where are you going?", "What's your budget?"],
+    "confidence": 0.3,
+}
+
+
+def _vague_pipeline(index):
+    return RecommendationPipeline(
+        index=index, embedder=StubEmbedding(dims=8),
+        generator=StubGenerationProvider([VAGUE_PAYLOAD]),
+        sessions=SessionStore(ttl_seconds=60))
+
+
+async def test_gate_fires_on_low_confidence_and_many_questions(index):
+    events = [e async for e in _vague_pipeline(index).run("manali", None, request_id="r")]
+    # Only understood + done — no searching/results
+    assert [e.event for e in events] == ["understood", "done"]
+    assert events[0].data["awaiting_clarification"] is True
+
+
+async def test_gate_result_has_no_groups(index):
+    events = [e async for e in _vague_pipeline(index).run("manali", None, request_id="r")]
+    response = collect(events)
+    assert response.awaiting_clarification is True
+    assert response.groups == []
+
+
+async def test_gate_saves_stalled_turns_in_session(index):
+    sessions = SessionStore(ttl_seconds=60)
+    pipe = RecommendationPipeline(
+        index=index, embedder=StubEmbedding(dims=8),
+        generator=StubGenerationProvider([VAGUE_PAYLOAD]),
+        sessions=sessions)
+    events = [e async for e in pipe.run("manali", None, request_id="r")]
+    sid = events[0].data["session_id"]
+    assert sessions.get(sid).stalled_turns == 1
+
+
+async def test_gate_forces_generation_after_two_stalls(index):
+    """Third consecutive vague turn must run retrieval regardless."""
+    sessions = SessionStore(ttl_seconds=60)
+    rerank_payload = {"groups": [{"label": "Travel Essentials", "picks": [
+        {"product_id": "B0", "reason": "Good for travel."}]}]}
+
+    # Burn two stalled turns
+    for i in range(2):
+        pipe = RecommendationPipeline(
+            index=index, embedder=StubEmbedding(dims=8),
+            generator=StubGenerationProvider([VAGUE_PAYLOAD]),
+            sessions=sessions)
+        events = [e async for e in pipe.run("manali", None if i == 0 else sid,
+                                             request_id=f"r{i}")]
+        sid = events[0].data["session_id"]
+
+    # Third turn — gate must not fire
+    pipe = RecommendationPipeline(
+        index=index, embedder=StubEmbedding(dims=8),
+        generator=StubGenerationProvider([VAGUE_PAYLOAD, rerank_payload]),
+        sessions=sessions)
+    events = [e async for e in pipe.run("manali", sid, request_id="r2")]
+    assert "searching" in [e.event for e in events], "retrieval must run on third stall"
+    assert events[0].data["awaiting_clarification"] is False
+    assert sessions.get(sid).stalled_turns == 0  # reset after generation runs

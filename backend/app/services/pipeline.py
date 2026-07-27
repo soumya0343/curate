@@ -49,10 +49,30 @@ class RecommendationPipeline:
             result = await intent_service.extract(
                 self.generator, conversation, prior_intent, request_id=request_id,
                 prior_sub_needs=prior_sub_needs)
-            self.sessions.put(sid, result.intent, [*history, query], result.sub_needs)
+
+            # Clarity gate: skip retrieval when the request is too vague.
+            # Two signals (either fires the gate):
+            #   - confidence < 0.4  (LLM self-reported; weak on smaller models)
+            #   - >= 2 clarifying questions (deterministic backstop)
+            # Loop protection: stalled_turns tracks consecutive gated turns.
+            # After 2 stalls we force generation regardless so the user never
+            # gets stuck answering questions forever.
+            stalled = prior_state.stalled_turns if prior_state else 0
+            too_vague = (
+                result.confidence < 0.4 or len(result.clarifying_questions) >= 2
+            ) and stalled < 2
+
+            if too_vague:
+                new_stalled = stalled + 1
+            else:
+                new_stalled = 0
+
+            self.sessions.put(sid, result.intent, [*history, query], result.sub_needs,
+                              stalled_turns=new_stalled)
             timings["intent"] = (time.perf_counter() - t0) * 1000
             log_stage(request_id, "intent", duration_ms=timings["intent"],
-                      sub_needs=len(result.sub_needs))
+                      sub_needs=len(result.sub_needs),
+                      awaiting_clarification=too_vague)
 
             yield StreamEvent(event="understood", data={
                 "session_id": sid,
@@ -60,7 +80,13 @@ class RecommendationPipeline:
                 "assumptions": [a.model_dump() for a in result.assumptions],
                 "sub_needs": [s.label for s in result.sub_needs],
                 "clarifying_questions": result.clarifying_questions,
+                "awaiting_clarification": too_vague,
             })
+
+            if too_vague:
+                timings["total"] = (time.perf_counter() - started) * 1000
+                yield StreamEvent(event="done", data={"timings_ms": timings})
+                return
 
             # Stage 2 + 3 - filter, then retrieve per sub-need
             t0 = time.perf_counter()
@@ -125,4 +151,5 @@ def collect(events: list[StreamEvent]) -> RecommendResponse:
         groups=[ResultGroup.model_validate(g) for g in results.get("groups", [])],
         relaxations=results.get("relaxations", []),
         timings_ms=by_event.get("done", {}).get("timings_ms", {}),
+        awaiting_clarification=understood.get("awaiting_clarification", False),
     )

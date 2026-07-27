@@ -4,7 +4,7 @@ from app.catalogue.index import load_index
 from app.config import Settings, get_settings
 from app.core.errors import ProviderUnavailable
 from app.providers.embedding import (EmbeddingProvider, GeminiEmbedding,
-                                     HashingEmbedding)
+                                     HashingEmbedding, JinaEmbedding)
 from app.providers.generation import (CerebrasGeneration, FallbackChain,
                                       GeminiGeneration, GenerationProvider,
                                       GitHubModelsGeneration, GroqGeneration,
@@ -76,6 +76,15 @@ def _build_embedding(settings: Settings) -> EmbeddingProvider:
     if settings.embedding_model == HashingEmbedding.model:
         # Keyless lexical embeddings, for the synthetic catalogue and local runs.
         return HashingEmbedding(dims=settings.embedding_dims)
+
+    if settings.embedding_model == JinaEmbedding.model:
+        keys = settings.keys_for("jina")
+        if not keys:
+            raise ProviderUnavailable("JINA_API_KEY is required for embeddings")
+        # "retrieval.query": the catalogue matrix was built with the document
+        # task ("retrieval.passage", JinaEmbedding's default); queries need the
+        # asymmetric counterpart, not the same task type as the documents.
+        return JinaEmbedding(keys, task="retrieval.query")
 
     keys = settings.keys_for("gemini")
     if not keys:

@@ -513,9 +513,10 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--embedder", choices=["hashing", "gemini"], default="hashing",
-                        help="hashing needs no key; gemini needs GEMINI_API_KEY and "
-                             "gives real semantic retrieval")
+    parser.add_argument("--embedder", choices=["hashing", "gemini", "jina"], default="hashing",
+                        help="hashing needs no key; gemini/jina need "
+                             "GEMINI_API_KEY/JINA_API_KEY and give real semantic "
+                             "retrieval")
     parser.add_argument("--out", type=Path, default=OUT_DIR)
     args = parser.parse_args()
 

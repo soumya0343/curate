@@ -1,0 +1,10 @@
+{
+  "model": "jina-embeddings-v3",
+  "dims": 768,
+  "count": 6000,
+  "normalised": true,
+  "dtype": "float16",
+  "built": "2026-07-27",
+  "synthetic": false,
+  "note": "Derived from the Amazon India Products 2023 dataset (asaniczka, ODC-By v1.0) via offline enrichment. See ATTRIBUTION.md."
+}

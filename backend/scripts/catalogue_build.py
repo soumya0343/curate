@@ -79,11 +79,33 @@ def _gemini_matrix(texts: list[str], model: str, dims: int) -> np.ndarray:
     return asyncio.run(run())
 
 
+def _jina_matrix(texts: list[str]) -> np.ndarray:
+    """Embed with Jina AI, when a key is available.
+
+    Free tier (100 RPM / 100K TPM) has enough headroom for a one-off catalogue
+    build where Gemini's much tighter embedding quota does not.
+    """
+    import asyncio
+
+    from app.config import get_settings
+    from app.providers.embedding import JinaEmbedding
+
+    keys = get_settings().keys_for("jina")
+    if not keys:
+        raise SystemExit("--embedder jina needs JINA_API_KEY")
+
+    return asyncio.run(JinaEmbedding(keys).embed(texts))
+
+
 def embed_matrix(texts: list[str], embedder: str, dims: int) -> tuple[np.ndarray, str, int]:
     """Return (matrix, model_id, dims actually used) for the chosen embedder."""
     if embedder == "gemini":
         model, dims = GEMINI_MODEL, GEMINI_DIMS
         matrix = _gemini_matrix(texts, model, dims)
+    elif embedder == "jina":
+        from app.providers.embedding import JinaEmbedding
+        model, dims = JinaEmbedding.model, JinaEmbedding.dims
+        matrix = _jina_matrix(texts)
     else:
         from app.providers.embedding import HashingEmbedding
         model = HashingEmbedding.model

@@ -90,9 +90,16 @@ is the mode the example above was produced in.
 
 ```bash
 cd backend
-python scripts/ingest_enriched.py --embedder gemini   # needs GEMINI_API_KEY; real semantic retrieval
+python scripts/ingest_enriched.py --embedder jina     # needs JINA_API_KEY; real semantic retrieval
+python scripts/ingest_enriched.py --embedder gemini   # needs GEMINI_API_KEY; same, tighter free quota
 python scripts/ingest_enriched.py --embedder hashing  # no key, quick smoke test only
 ```
+
+`--embedder jina` is the practical default for a one-off catalogue build:
+Gemini's free-tier embedding quota (a handful of requests before a 429, shared
+across all keys on one project — key rotation does not help) is too tight for
+a 6,000-row batch job; Jina's free tier (100 RPM / 100K TPM) has enough
+headroom. Both give real semantic retrieval; `hashing` does not (see mode 1).
 
 Reads `backend/data/enriched.csv` (not committed, same as the raw source CSV —
 see **Data**) and writes `catalogue.jsonl.gz`, `embeddings.npy` and
@@ -219,7 +226,8 @@ with no credential is skipped rather than failing the chain.
 | `github` | `openai/gpt-4o-mini` | GitHub Models, a PAT with `models:read`. Low daily ceiling, so put it last |
 | `mock` | — | Keyless rule-based provider. Ends any chain it appears in |
 
-Embeddings are `gemini-embedding-001` at 768 dims, or the keyless
+Embeddings are `gemini-embedding-001` at 768 dims, `jina-embeddings-v3` also at
+768 dims (an alternative with a far roomier free tier), or the keyless
 `hashing-bow-v1` at 256. **Embeddings never fall back to another provider** —
 query vectors must share the catalogue's vector space, and a swap would return
 plausible-looking numbers that are noise. Key rotation is safe and provider
@@ -233,7 +241,8 @@ characters. Run it before assuming a key is good.
 
 | Variable | Default | Notes |
 |---|---|---|
-| `GEMINI_API_KEY` | — | Required unless `EMBEDDING_MODEL=hashing-bow-v1` |
+| `GEMINI_API_KEY` | — | Required unless `EMBEDDING_MODEL` is `hashing-bow-v1` or `jina-embeddings-v3` |
+| `JINA_API_KEY` | — | Required when `EMBEDDING_MODEL=jina-embeddings-v3`. Free tier: 100 RPM / 100K TPM |
 | `GROQ_API_KEY`, `CEREBRAS_API_KEY` | — | Optional chain members |
 | `GITHUB_TOKEN` | — | GitHub Models. A PAT with `models:read`, not an API key |
 | `*_API_KEYS`, `GITHUB_TOKENS` | — | Comma-separated. Several credentials per provider; a rate limit rotates to the next and retries |
@@ -260,7 +269,8 @@ per-request under load.
 | `ManifestMismatch: catalogue built with … but configured …` | `EMBEDDING_MODEL` / `EMBEDDING_DIMS` don't match the manifest | Fix the config, or re-embed the catalogue. Never loosen the check |
 | `ManifestMismatch: row misalignment: N products, M vectors` | JSONL and `.npy` are out of sync | Rebuild both; line order is a contract |
 | `FileNotFoundError` on `embeddings.manifest.json` | No catalogue at `DATA_DIR` | Build the mock one, or point `DATA_DIR` at `data/mock` |
-| `ProviderUnavailable: GEMINI_API_KEY is required for embeddings` | No key and not using the hashing embedder | Set the key, or set `EMBEDDING_MODEL=hashing-bow-v1` |
+| `ProviderUnavailable: GEMINI_API_KEY is required for embeddings` | No key and not using `hashing-bow-v1`/`jina-embeddings-v3` | Set `GEMINI_API_KEY`, or switch `EMBEDDING_MODEL` |
+| `RateLimited: all N gemini-embedding key(s) are rate limited` | Gemini's free-tier embedding quota is per-project, not per-key — extra keys on the same project don't help | Use `--embedder jina` for the catalogue build instead |
 | `404 … no longer available to new users` | The model id retired | Set `GEMINI_MODEL`. `check_providers.py` finds this in seconds |
 | `402 payment_required` from Cerebras | Free tier does not include inference | Drop `cerebras` from `GENERATION_CHAIN` until billing is on |
 | `RATE_LIMITED` (429) | Every credential on every provider refused on quota | Add keys to `*_API_KEYS`, or wait. It is retryable |

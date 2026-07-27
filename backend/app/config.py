@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     gemini_api_key: str | None = None
     groq_api_key: str | None = None
     cerebras_api_key: str | None = None
+    jina_api_key: str | None = None
 
     # Plural forms hold several keys for one provider, comma-separated. Free
     # tiers are what this project actually runs out of, so a rate limit rotates
@@ -20,6 +21,7 @@ class Settings(BaseSettings):
     gemini_api_keys: Annotated[list[str], NoDecode] = []
     groq_api_keys: Annotated[list[str], NoDecode] = []
     cerebras_api_keys: Annotated[list[str], NoDecode] = []
+    jina_api_keys: Annotated[list[str], NoDecode] = []
 
     # GitHub Models authenticates with a personal access token carrying the
     # models:read scope, so it is a token rather than an API key. keys_for()
@@ -62,8 +64,8 @@ class Settings(BaseSettings):
     database_url: str = "postgresql://postgres:postgres@localhost:5432/catalogue"
 
     @field_validator("cors_origins", "gemini_api_keys", "groq_api_keys",
-                     "cerebras_api_keys", "github_tokens", "generation_chain",
-                     mode="before")
+                     "cerebras_api_keys", "jina_api_keys", "github_tokens",
+                     "generation_chain", mode="before")
     @classmethod
     def _split_csv(cls, v):
         if isinstance(v, str):

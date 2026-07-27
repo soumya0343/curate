@@ -8,7 +8,7 @@ export function RefineBar({
   const [value, setValue] = useState("");
 
   return (
-    <div className="sticky bottom-0 mt-8 border-t border-primary/10 bg-surface/95 py-4 backdrop-blur">
+    <div>
       <div className="mb-2 flex flex-wrap gap-2">
         {QUICK.map((q) => (
           <button

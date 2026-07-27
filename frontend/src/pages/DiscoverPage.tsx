@@ -101,6 +101,7 @@ export function DiscoverPage() {
                   ]}
                   questions={response.clarifying_questions}
                   onAnswer={refine}
+                  refineBar={<RefineBar onRefine={refine} busy={status === "loading"} />}
                 />
                 {response.clarifying_questions.length > 0 && (
                   <p className="mb-4 text-sm text-primary/50">
@@ -117,7 +118,6 @@ export function DiscoverPage() {
             {response.groups.map((group) => (
               <ResultGroup key={group.label} group={group} />
             ))}
-            <RefineBar onRefine={refine} busy={status === "loading"} />
           </div>
         )}
 

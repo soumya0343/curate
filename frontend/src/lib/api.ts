@@ -36,8 +36,26 @@ export async function recommend(
   return body as RecommendResponse;
 }
 
-export async function listCatalogue(page: number, pageSize = 20): Promise<CatalogueResponse> {
-  const response = await fetch(`${BASE}/api/catalogue?page=${page}&page_size=${pageSize}`);
+export interface CatalogueFilters {
+  page?: number;
+  pageSize?: number;
+  search?: string;
+  category?: string;
+  price_tier?: string;
+  sort_by?: string;
+  order?: "asc" | "desc";
+}
+
+export async function listCatalogue(filters: CatalogueFilters = {}): Promise<CatalogueResponse> {
+  const { page = 1, pageSize = 20, search, category, price_tier, sort_by, order } = filters;
+  const params = new URLSearchParams({ page: String(page), page_size: String(pageSize) });
+  if (search) params.set("search", search);
+  if (category) params.set("category", category);
+  if (price_tier) params.set("price_tier", price_tier);
+  if (sort_by) params.set("sort_by", sort_by);
+  if (order) params.set("order", order);
+
+  const response = await fetch(`${BASE}/api/catalogue?${params}`);
   const body = await response.json();
   if (!response.ok) {
     const { error } = body as ApiError;
@@ -48,6 +66,12 @@ export async function listCatalogue(page: number, pageSize = 20): Promise<Catalo
     );
   }
   return body as CatalogueResponse;
+}
+
+export async function listCategories(): Promise<{ category: string; count: number }[]> {
+  const response = await fetch(`${BASE}/api/catalogue/categories`);
+  if (!response.ok) return [];
+  return response.json();
 }
 
 export interface SseFrame {

@@ -1,4 +1,5 @@
 import { useState } from "react";
+import type { ReactNode } from "react";
 import type { Assumption } from "../types";
 
 // Fields the customer stated outright rather than something the model guessed -
@@ -45,11 +46,12 @@ export function statedFactChips(
 }
 
 export function AssumptionChips({
-  assumptions, questions, onAnswer,
+  assumptions, questions, onAnswer, refineBar,
 }: {
   assumptions: Assumption[];
   questions: string[];
   onAnswer: (answer: string) => void;
+  refineBar?: ReactNode;
 }) {
   const [answer, setAnswer] = useState("");
   if (assumptions.length === 0 && questions.length === 0) return null;
@@ -83,6 +85,7 @@ export function AssumptionChips({
               </li>
             ))}
           </ul>
+          {refineBar && <div className="mt-4 border-t border-gold-200 pt-3">{refineBar}</div>}
         </>
       )}
 

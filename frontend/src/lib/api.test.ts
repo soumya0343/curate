@@ -35,7 +35,7 @@ describe("recommend", () => {
 describe("listCatalogue", () => {
   it("requests the given page and page size", async () => {
     stubFetch(200, { total: 0, page: 2, page_size: 20, pages: 1, items: [] });
-    await listCatalogue(2, 20);
+    await listCatalogue({ page: 2, pageSize: 20 });
     const [url] = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0];
     expect(url).toContain("page=2");
     expect(url).toContain("page_size=20");
@@ -43,12 +43,12 @@ describe("listCatalogue", () => {
 
   it("returns the parsed response on success", async () => {
     stubFetch(200, { total: 1, page: 1, page_size: 20, pages: 1, items: [{ id: "p1" }] });
-    const result = await listCatalogue(1);
+    const result = await listCatalogue({ page: 1 });
     expect(result.items).toHaveLength(1);
   });
 
   it("throws ApiFailure on a non-ok response", async () => {
     stubFetch(503, { error: { code: "CATALOGUE_UNAVAILABLE", message: "down", retryable: true } });
-    await expect(listCatalogue(1)).rejects.toThrow(ApiFailure);
+    await expect(listCatalogue({ page: 1 })).rejects.toThrow(ApiFailure);
   });
 });

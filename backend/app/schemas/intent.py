@@ -42,5 +42,5 @@ class IntentResult(BaseModel):
     intent: ShoppingIntent = Field(default_factory=ShoppingIntent)
     sub_needs: list[SubNeed] = []
     assumptions: list[Assumption] = []
-    clarifying_question: str | None = None
+    clarifying_questions: list[str] = []
     confidence: float = 0.5

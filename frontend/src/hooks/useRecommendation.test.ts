@@ -11,7 +11,7 @@ const { recommend } = await import("../lib/api");
 afterEach(() => vi.clearAllMocks());
 
 const RESPONSE = {
-  session_id: "sess-1", intent: {}, assumptions: [], clarifying_question: null,
+  session_id: "sess-1", intent: {}, assumptions: [], clarifying_questions: [],
   groups: [{ label: "Backpack", recommendations: [], empty_reason: "none" }],
   relaxations: [], timings_ms: {},
 };

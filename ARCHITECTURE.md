@@ -278,7 +278,7 @@ with no credentials:
 
 | | Real | Keyless |
 |---|---|---|
-| Embeddings | `gemini-embedding-001`, 768d | `hashing-bow-v1`, 256d — hashed bag of words |
+| Embeddings | `gemini-embedding-001` or `jina-embeddings-v3`, 768d | `hashing-bow-v1`, 256d — hashed bag of words |
 | Generation | Gemini / Groq / GitHub Models | `MockGeneration` — keyword rules |
 
 `MockGeneration` matches keywords rather than reading a request, but **the
@@ -294,35 +294,140 @@ for exercising the machinery, not a retrieval system.
 
 ## Storage: files for recommendation, Postgres for browsing
 
-**Recommendation reads files.** `catalogue.jsonl.gz` plus a row-aligned `.npy`
-matrix, loaded once in the FastAPI lifespan hook. Measured on this machine at the
-shipping shape (22,000 × 768 fp16): cosine + top-50 in 1.11 ms, the same with
-price and category filters in 1.09 ms — filtering is free, because it is a boolean
-mask. A pgvector round trip is 1–3 ms *before doing any work*, so a database would
-be slower, and the pre-filter-versus-post-filter problem that makes hybrid
-retrieval awkward in vector databases does not exist at this scale.
+There is no single database. Two artifacts, on disk, cover two entirely
+different access patterns, and a third store — Postgres — sits off to the side
+of both, wired to only one of them.
 
-**Catalogue browsing reads Postgres.** `/api/catalogue` filters, sorts and
-paginates across the whole catalogue — a different access pattern, which SQL does
-well and a NumPy matrix does not. `app/db/mock_db.py` is a psycopg2 connection
-pool with inline idempotent DDL; there is no ORM and no migration tool.
+```mermaid
+flowchart LR
+    subgraph offline["Offline (scripts/ingest_enriched.py)"]
+        CSV["enriched.csv"] --> BUILD["catalogue_build.py\n(verify + embed)"]
+    end
+
+    BUILD --> JSONL["catalogue.jsonl.gz\n(products, row n)"]
+    BUILD --> NPY["embeddings.npy\n(vectors, row n)"]
+    BUILD --> MANIFEST["embeddings.manifest.json\n(model, dims, count)"]
+
+    JSONL --> SEED["seed_db.py\n(one-way, JSONL → Postgres)"]
+    SEED --> PG[("Postgres\nproducts table")]
+
+    JSONL --> INDEX["CatalogueIndex\n(in-process memory)"]
+    NPY --> INDEX
+    MANIFEST -. "checked at boot\nManifestMismatch" .-> INDEX
+
+    INDEX --> RECOMMEND["/api/recommend\n(matmul + top-k)"]
+    PG --> BROWSE["/api/catalogue\n(filter/sort/paginate)"]
+
+    style PG fill:#336791,color:#fff
+    style INDEX fill:#4c6ef5,color:#fff
+```
+
+### Recommendation reads files, not a database
+
+`app/catalogue/loader.py` + `app/catalogue/index.py` load three files from
+`DATA_DIR` (defaults to `backend/data/`) once, in the FastAPI lifespan hook,
+and keep them in process memory for the life of the worker:
+
+| File | Contents | Loaded as |
+|---|---|---|
+| `catalogue.jsonl.gz` | one JSON object per product — id, title, price, category, attributes dict, etc. | `list[Product]`, `app/catalogue/loader.py` |
+| `embeddings.npy` | one row per product, L2-normalised, row *n* matches JSONL line *n* | `np.ndarray`, `app/catalogue/index.py:63` |
+| `embeddings.manifest.json` | `{model, dims, count, normalised, dtype, built, synthetic}` | checked, not loaded into the index |
+
+`load_index()` refuses to start if `manifest["model"]`/`manifest["dims"]`
+disagree with the configured `EMBEDDING_MODEL`/`EMBEDDING_DIMS`
+(`ManifestMismatch`, `app/catalogue/index.py:53-60`), and `CatalogueIndex.__init__`
+separately refuses if the product count doesn't match the matrix row count
+(`app/catalogue/index.py:23-25`). Both are boot-time failures — see
+[Embeddings have no fallback chain](#embeddings-have-no-fallback-chain) above
+for why a mismatch here is worse than a crash.
+
+There is no query language and no server round trip: `CatalogueIndex.search()`
+is a NumPy matmul, `matrix @ query_vec`, because vectors are pre-normalised so
+the dot product *is* the cosine similarity, followed by an `argpartition` top-k
+(`app/catalogue/index.py:39-46`). A boolean row mask handles the hard-filter
+subset from Stage 2, so filtering costs nothing extra — it's the same matmul
+over fewer rows, not a second pass.
+
+Measured on this machine at the shipping shape (22,000 × 768 fp16): cosine +
+top-50 in 1.11 ms, the same with price and category filters in 1.09 ms — the
+filtered case isn't slower because the mask is applied before the matmul, not
+after. A pgvector round trip is 1–3 ms *before doing any work*, so a database
+would be slower here, and the pre-filter-versus-post-filter problem that makes
+hybrid retrieval awkward in vector databases does not exist at this scale — the
+whole matrix fits comfortably in cache, so there's no index to keep in sync
+with the filter.
+
+The catalogue actually committed at `backend/data/` right now is smaller than
+that measured shape: 6,000 real Amazon India products, `jina-embeddings-v3` at
+768 dims, float16, `synthetic: false` (`backend/data/embeddings.manifest.json`,
+built by `scripts/ingest_enriched.py --embedder jina`, see
+[Offline pipeline](#offline-pipeline)). At 6,000 rows the matrix is ~8.8 MB —
+brute-force search over it is microseconds, well under the measured 22k-row
+numbers above. `backend/data/mock/` holds a parallel synthetic catalogue of the
+same shape, reachable via `DATA_DIR=data/mock`, for the zero-credential path.
+
+### Catalogue browsing reads Postgres
+
+`/api/catalogue` filters, sorts and paginates across the whole catalogue — a
+different access pattern, which SQL does well and a NumPy matrix does not.
+`app/db/mock_db.py` (the module name predates the real catalogue; it is a real
+`psycopg2` connection pool, not an in-memory fake — see the module docstring)
+opens a `ThreadedConnectionPool` against `DATABASE_URL` at startup
+(`init_db()`, called from `app/main.py`) and runs inline, idempotent DDL to
+create/patch a single `products` table (`app/db/mock_db.py:31-66`). There is no
+ORM and no migration tool — schema changes are `ALTER TABLE ... ADD COLUMN IF
+NOT EXISTS` statements appended to `CREATE_TABLE`, applied on every boot.
+
+`get_connection()` (`app/db/mock_db.py:128-147`), used by
+`app/api/routes_catalogue.py`, is a contextmanager that checks a connection out
+of the pool and always returns it, and raises `CatalogueUnavailable` — the app's
+own error type, not a raw `psycopg2` exception — if the pool was never opened or
+is exhausted, so a database problem surfaces through the normal error envelope
+(503, retryable) instead of an unhandled 500.
 
 Three properties keep the split honest:
 
-- **The JSONL is authoritative.** `scripts/seed_db.py` moves data one way only,
-  JSONL → Postgres. Nothing writes back. Line order in the JSONL is pinned to the
-  vector rows, so a database that could reorder it would be a correctness hazard.
-- **Postgres is optional.** `init_db()` is best-effort in the lifespan: an
-  unreachable database disables browsing and leaves recommendation untouched.
+- **The JSONL is authoritative, Postgres is a mirror.** `scripts/seed_db.py`
+  moves data one way only, JSONL → Postgres, via `products` upserts keyed on
+  `id`. Nothing writes back, and nothing in the app ever writes to
+  `products` outside that script. Line order in the JSONL is pinned to the
+  vector rows; Postgres has no concept of that order and isn't allowed to, which
+  is exactly why it's excluded from the recommendation path rather than merged
+  into it.
+- **Postgres is optional.** `init_db(required=False)` in the lifespan swallows a
+  `psycopg2.Error` — logs a warning and returns `False` — rather than failing
+  app startup. Recommendation needs no Postgres at all, so refusing to boot over
+  one unreachable side-store would take the whole API down to protect a feature
+  that isn't on the critical path.
 - **A database outage costs browsing, not the product.** Which is why
-  `CatalogueUnavailable` is its own error code (503, retryable) rather than a 500.
+  `CatalogueUnavailable` is its own error code (503, retryable) rather than a
+  500 — `/api/recommend` keeps working unaffected.
 
-Pool size is 10, sized to FastAPI's sync-route threadpool rather than to expected
-traffic: every catalogue route is a `def`, so Starlette runs it in a worker thread
-and each concurrent request holds a connection for its whole body.
+Pool size is 10 (`POOL_SIZE`, `app/db/mock_db.py:29`), sized to FastAPI's
+sync-route threadpool rather than to expected traffic: every catalogue route is
+a `def`, so Starlette runs it in a worker thread and each concurrent request
+holds a connection for its whole body. `minconn == maxconn` on purpose —
+`psycopg2` only returns a connection to the OS pool while `len(pool) <
+minconn`, so a `minconn` below `maxconn` would silently open a fresh connection
+per request past that point, which is the cost pooling exists to avoid.
 
-**Revisit the file approach at:** ~500k vectors, multiple worker processes,
-runtime writes, or persisted cross-session user state.
+### Why not one database for both
+
+Putting the catalogue matrix in Postgres (e.g. `pgvector`) would mean a network
+round trip per query for something that is currently a same-process array
+lookup, would reintroduce the pre-filter/post-filter tension the file approach
+sidesteps for free, and would make the vector store as fragile as any other
+Postgres dependency — while today a Postgres outage is scoped to browsing only.
+Conversely, putting the browsable catalogue in the JSONL/`.npy` pair would mean
+hand-rolling filter/sort/pagination over a NumPy structure that SQL already
+does correctly. Two stores, chosen for what each is actually good at, is
+cheaper than one store doing both jobs adequately.
+
+**Revisit the file approach at:** ~500k vectors, multiple worker processes each
+needing a consistent view of the matrix, runtime writes to the catalogue, or
+persisted cross-session user state — none of which apply yet (see
+[Known constraints](#known-constraints)).
 
 ## Frontend
 
@@ -450,11 +555,16 @@ work.
   sub-needs concurrently are the levers, neither yet pulled.
 - **Catalogue rebuild is coupled to embedding config.** Changing the model or dims
   requires re-embedding everything before the app will start.
-- **The real catalogue artifacts are not yet built into `data/`** — `scripts/ingest_enriched.py`
-  exists and is tested against `data/enriched.csv`, but running it with real
-  (`--embedder gemini`) embeddings is a deliberate, separate step, not yet taken.
-  Until then no claim about coverage, recall or recommendation quality in this
-  repository is backed by a measurement.
+- **The real catalogue is built but unevaluated.** `backend/data/` holds 6,000
+  real Amazon India products with real `jina-embeddings-v3` vectors (built via
+  `scripts/ingest_enriched.py --embedder jina`, see [Offline pipeline](#offline-pipeline)
+  and [Storage](#storage-files-for-recommendation-postgres-for-browsing)), so
+  the "not yet built" state this bullet used to describe no longer holds. What's
+  still missing is a relevance evaluation against it — see the next bullet. A
+  deployer must set `EMBEDDING_MODEL=jina-embeddings-v3` (the config default is
+  still `gemini-embedding-001`) or re-run ingestion with `--embedder gemini` to
+  match the committed manifest; a mismatch fails loudly at boot
+  (`ManifestMismatch`) rather than silently, by design.
 
 ## Offline pipeline
 

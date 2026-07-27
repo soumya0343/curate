@@ -30,7 +30,7 @@ export interface RecommendResponse {
   session_id: string;
   intent: Record<string, unknown>;
   assumptions: Assumption[];
-  clarifying_question: string | null;
+  clarifying_questions: string[];
   groups: ResultGroup[];
   relaxations: string[];
   timings_ms: Record<string, number>;

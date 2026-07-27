@@ -51,7 +51,7 @@ class RecommendationPipeline:
                 "intent": result.intent.model_dump(),
                 "assumptions": [a.model_dump() for a in result.assumptions],
                 "sub_needs": [s.label for s in result.sub_needs],
-                "clarifying_question": result.clarifying_question,
+                "clarifying_questions": result.clarifying_questions,
             })
 
             # Stage 2 + 3 - filter, then retrieve per sub-need
@@ -113,7 +113,7 @@ def collect(events: list[StreamEvent]) -> RecommendResponse:
         session_id=understood.get("session_id", ""),
         intent=understood.get("intent") or {},
         assumptions=understood.get("assumptions") or [],
-        clarifying_question=understood.get("clarifying_question"),
+        clarifying_questions=understood.get("clarifying_questions") or [],
         groups=[ResultGroup.model_validate(g) for g in results.get("groups", [])],
         relaxations=results.get("relaxations", []),
         timings_ms=by_event.get("done", {}).get("timings_ms", {}),

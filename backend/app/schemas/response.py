@@ -35,7 +35,7 @@ class RecommendResponse(BaseModel):
     session_id: str
     intent: ShoppingIntent
     assumptions: list[Assumption] = []
-    clarifying_question: str | None = None
+    clarifying_questions: list[str] = []
     groups: list[ResultGroup] = []
     relaxations: list[str] = []
     timings_ms: dict[str, float] = {}

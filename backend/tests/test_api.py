@@ -19,7 +19,7 @@ from app.services.sessions import SessionStore
 INTENT_PAYLOAD = {
     "intent": {"activity": "trekking"},
     "sub_needs": [{"label": "Backpack", "query": "trekking rucksack"}],
-    "assumptions": [], "clarifying_question": None, "confidence": 0.8,
+    "assumptions": [], "clarifying_questions": [], "confidence": 0.8,
 }
 RERANK_PAYLOAD = {"groups": [{"label": "Backpack", "picks": [
     {"product_id": "B0", "reason": "Suited to multi-day treks."}]}]}

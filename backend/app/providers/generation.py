@@ -170,12 +170,12 @@ class MockGeneration:
                 "reason": "none stated, so nothing was filtered out on price",
                 "confidence": "high"})
 
-        clarifying = None
+        clarifying_questions = []
         if intent.get("occasion") == "gifting" and "budget_max" not in intent:
-            clarifying = "What budget did you have in mind for the gift?"
+            clarifying_questions.append("What budget did you have in mind for the gift?")
 
         return {"intent": intent, "sub_needs": sub_needs, "assumptions": assumptions,
-                "clarifying_question": clarifying, "confidence": 0.5}
+                "clarifying_questions": clarifying_questions, "confidence": 0.5}
 
     # -- stage 5 ----------------------------------------------------------
     _FIELD = re.compile(r"(\w+)=(.*)")

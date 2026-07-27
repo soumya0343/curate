@@ -16,7 +16,7 @@ INTENT_PAYLOAD = {
     "sub_needs": [{"label": "Backpack", "query": "trekking rucksack"}],
     "assumptions": [{"field": "climate", "value": "cold-weather conditions likely",
                      "reason": "high-altitude trek", "confidence": "medium"}],
-    "clarifying_question": None, "confidence": 0.8,
+    "clarifying_questions": [], "confidence": 0.8,
 }
 
 
@@ -104,7 +104,7 @@ async def test_follow_up_merges_onto_prior_intent(index):
 
     delta = {"intent": {"budget_max": 3000},
              "sub_needs": [{"label": "Backpack", "query": "cheap rucksack"}],
-             "assumptions": [], "clarifying_question": None, "confidence": 0.7}
+             "assumptions": [], "clarifying_questions": [], "confidence": 0.7}
     second = RecommendationPipeline(
         index=index, embedder=StubEmbedding(dims=8),
         generator=StubGenerationProvider([delta, {"groups": []}]),

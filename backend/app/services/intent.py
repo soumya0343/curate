@@ -33,7 +33,7 @@ Return ONLY JSON:
   }},
   "sub_needs": [{{"label": "Short group heading", "query": "search phrase describing the item"}}],
   "assumptions": [{{"field": "...", "value": "...", "reason": "...", "confidence": "low"|"medium"|"high"}}],
-  "clarifying_question": "one question, or null",
+  "clarifying_questions": ["question 1", "question 2", ...],
   "confidence": 0.0-1.0
 }}
 
@@ -45,9 +45,10 @@ RULES:
   "medium", never "sub-zero nights at 4,200 m".
 - Every judgement you made that the customer did not state belongs in
   "assumptions", so it can be shown and edited.
-- clarifying_question: set ONLY when a critical detail is genuinely unguessable
-  (for example a gifting budget, which could be Rs 2,000 or Rs 50,000). Results
-  are always returned alongside it, so never treat it as blocking.
+- clarifying_questions: 0 to 3 questions, only for details that are genuinely
+  unguessable (for example a gifting budget, which could be Rs 2,000 or
+  Rs 50,000). Empty list if nothing needs asking. Results are always returned
+  alongside them, so never treat these as blocking.
 """
 
 PRIOR_BLOCK = """
@@ -83,9 +84,14 @@ def parse_intent_payload(payload: dict) -> IntentResult:
             confidence=raw.get("confidence") if raw.get("confidence") in
             ("low", "medium", "high") else "medium"))
 
+    clarifying_questions = [
+        str(q).strip() for q in (payload.get("clarifying_questions") or [])
+        if str(q).strip()
+    ][:3]
+
     return IntentResult(
         intent=intent, sub_needs=sub_needs, assumptions=assumptions,
-        clarifying_question=payload.get("clarifying_question") or None,
+        clarifying_questions=clarifying_questions,
         confidence=float(payload.get("confidence") or 0.5),
     )
 

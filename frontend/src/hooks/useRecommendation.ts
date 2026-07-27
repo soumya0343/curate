@@ -43,7 +43,7 @@ export function useRecommendation() {
         setPartial({
           session_id: data.session_id,
           assumptions: data.assumptions,
-          clarifying_question: data.clarifying_question,
+          clarifying_questions: data.clarifying_questions,
         } as Partial<RecommendResponse>);
         setStage("searching");
       },
@@ -56,7 +56,7 @@ export function useRecommendation() {
             session_id: sessionId.current ?? "",
             intent: {},
             assumptions: current?.assumptions ?? [],
-            clarifying_question: current?.clarifying_question ?? null,
+            clarifying_questions: current?.clarifying_questions ?? [],
             groups: data.groups,
             relaxations: data.relaxations ?? [],
             timings_ms: {},

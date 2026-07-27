@@ -14,7 +14,7 @@ PAYLOAD = {
     "assumptions": [{"field": "climate", "value": "cold-weather conditions likely",
                      "reason": "high-altitude trek in late October",
                      "confidence": "medium"}],
-    "clarifying_question": None,
+    "clarifying_questions": [],
     "confidence": 0.82,
 }
 
@@ -28,7 +28,7 @@ def test_parse_extracts_sub_needs_and_assumptions():
 
 def test_parse_tolerates_missing_optional_keys():
     result = parse_intent_payload({"sub_needs": [{"label": "X", "query": "y"}]})
-    assert result.clarifying_question is None
+    assert result.clarifying_questions == []
     assert result.intent.budget_max is None
 
 

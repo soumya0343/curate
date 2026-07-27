@@ -50,17 +50,23 @@ export default function App() {
             </div>
           )}
 
-          {/* Streaming progress — assumptions visible before results land */}
-          {partial && stage !== "ready" && (
+          {/* Streaming progress — visible from submit until results land */}
+          {stage !== "idle" && stage !== "ready" && stage !== "error" && (
             <div className="mt-2">
-              <AssumptionChips
-                assumptions={partial.assumptions ?? []}
-                question={partial.clarifying_question ?? null}
-                onAnswer={refine}
-              />
+              {partial && (
+                <AssumptionChips
+                  assumptions={partial.assumptions ?? []}
+                  questions={partial.clarifying_questions ?? []}
+                  onAnswer={refine}
+                />
+              )}
               <div className="flex items-center gap-2 text-sm text-primary/40">
                 <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-gold-400" />
-                {stage === "searching" ? "Searching the catalogue…" : "Choosing the best matches…"}
+                {stage === "understanding"
+                  ? "Understanding your request…"
+                  : stage === "searching"
+                  ? "Searching the catalogue…"
+                  : "Choosing the best matches…"}
               </div>
             </div>
           )}
@@ -70,9 +76,14 @@ export default function App() {
             <div>
               <AssumptionChips
                 assumptions={response.assumptions}
-                question={response.clarifying_question}
+                questions={response.clarifying_questions}
                 onAnswer={refine}
               />
+              {response.clarifying_questions.length > 0 && (
+                <p className="mb-4 text-sm text-primary/50">
+                  Meanwhile, while you think that over — here's what I'd suggest based on what I assumed:
+                </p>
+              )}
               {response.relaxations.map((note) => (
                 <p key={note} className="mb-3 rounded-xl border border-gold-200 bg-gold-50 p-3 text-sm text-primary/70">
                   {note}

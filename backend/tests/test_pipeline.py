@@ -165,7 +165,7 @@ async def test_unexpected_exception_never_leaks_internals(index):
 VAGUE_PAYLOAD = {
     "intent": {}, "sub_needs": [],
     "assumptions": [],
-    "clarifying_questions": ["Where are you going?", "What's your budget?"],
+    "clarifying_questions": ["Where are you going?", "What's your budget?", "Who is this for?"],
     "confidence": 0.3,
 }
 

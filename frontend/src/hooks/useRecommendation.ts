@@ -13,8 +13,14 @@ export function useRecommendation() {
   const [partial, setPartial] = useState<Partial<RecommendResponse> | null>(null);
   const [queries, setQueries] = useState<string[]>([]);
   const sessionId = useRef<string | undefined>(undefined);
+  const abortRef = useRef<AbortController | null>(null);
 
   const submitStreaming = useCallback(async (query: string, useSession = false) => {
+    // Abort any in-flight stream before starting a new one
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+
     setQueries((prev) => (useSession ? [...prev, query] : [query]));
     setStatus("loading");
     setStage("understanding");
@@ -45,14 +51,18 @@ export function useRecommendation() {
             groups: data.groups,
             relaxations: data.relaxations ?? [],
             timings_ms: {},
+            awaiting_clarification: false,
           } as RecommendResponse);
           return current;
         });
         setStage("ready");
         setStatus("ready");
       },
-      onError: (err) => { setError(err); setStage("error"); setStatus("error"); },
-    });
+      onError: (err) => {
+        if (controller.signal.aborted) return;
+        setError(err); setStage("error"); setStatus("error");
+      },
+    }, controller.signal);
   }, []);
 
   const submit = useCallback((query: string) => submitStreaming(query, false), [submitStreaming]);

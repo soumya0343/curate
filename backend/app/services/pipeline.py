@@ -53,14 +53,25 @@ class RecommendationPipeline:
             # Clarity gate: skip retrieval when the request is too vague.
             # Two signals (either fires the gate):
             #   - confidence < 0.4  (LLM self-reported; weak on smaller models)
-            #   - >= 2 clarifying questions (deterministic backstop)
+            #   - >= 2 LLM-generated clarifying questions (deterministic backstop)
+            # We count questions BEFORE the gender injection that intent.extract()
+            # may append — that structural question is not a vagueness signal.
             # Loop protection: stalled_turns tracks consecutive gated turns.
             # After 2 stalls we force generation regardless so the user never
             # gets stuck answering questions forever.
             stalled = prior_state.stalled_turns if prior_state else 0
-            too_vague = (
-                result.confidence < 0.4 or len(result.clarifying_questions) >= 2
-            ) and stalled < 2
+            llm_question_count = len(result.clarifying_questions) - (
+                1 if intent_service.GENDER_CLARIFYING_QUESTION in result.clarifying_questions else 0
+            )
+            # If the user is responding to a gated turn (stalled > 0), don't
+            # re-gate on question count alone — they're actively answering.
+            # Only confidence < 0.4 can gate a response-to-gate turn.
+            if stalled > 0:
+                too_vague = result.confidence < 0.4 and stalled < 2
+            else:
+                too_vague = (
+                    result.confidence < 0.4 or llm_question_count >= 2
+                ) and stalled < 2
 
             if too_vague:
                 new_stalled = stalled + 1

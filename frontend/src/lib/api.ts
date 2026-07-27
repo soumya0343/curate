@@ -114,12 +114,21 @@ export async function recommendStream(
   query: string,
   sessionId: string | undefined,
   handlers: StreamHandlers,
+  signal?: AbortSignal,
 ): Promise<void> {
-  const response = await fetch(`${BASE}/api/recommend/stream`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ query, session_id: sessionId ?? null }),
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${BASE}/api/recommend/stream`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ query, session_id: sessionId ?? null }),
+      signal,
+    });
+  } catch (err) {
+    if ((err as any)?.name === "AbortError") return;
+    handlers.onError?.(new ApiFailure("INTERNAL", "Stream failed to start.", true));
+    return;
+  }
 
   if (!response.ok || !response.body) {
     handlers.onError?.(new ApiFailure("INTERNAL", "Stream failed to start.", true));
@@ -131,7 +140,13 @@ export async function recommendStream(
   let buffer = "";
 
   for (;;) {
-    const { done, value } = await reader.read();
+    let done: boolean, value: Uint8Array | undefined;
+    try {
+      ({ done, value } = await reader.read());
+    } catch (err) {
+      if ((err as any)?.name === "AbortError") return;
+      break;
+    }
     if (done) break;
     buffer += decoder.decode(value, { stream: true });
 
@@ -141,6 +156,7 @@ export async function recommendStream(
     buffer = buffer.slice(lastBoundary + 2);
 
     for (const frame of parseSseFrames(complete)) {
+      if (signal?.aborted) return;
       const data = frame.data as any;
       if (frame.event === "understood") handlers.onUnderstood?.(data);
       else if (frame.event === "searching") handlers.onSearching?.(data);

@@ -54,6 +54,13 @@ RULES:
   in the conversation - the app keeps the existing categories automatically.
   Only return sub_needs when the customer is asking for a genuinely NEW
   category of item not already covered (e.g. "I need other trek items also").
+- sub_needs query field: make it as specific as possible. Encode destination,
+  activity, style, and gender directly into the query string so the product
+  search lands in the right neighbourhood. BAD: "casual outfits for women".
+  GOOD: "casual western wear beach holiday women sundress shorts". A beach
+  destination like Goa implies western/resort wear, not traditional Indian wear.
+  A trek implies functional/outdoor gear, not fashion. Always reflect the
+  activity and destination context in the query.
 - For a FIRST-time request, sub_needs must never be empty as long as there is
   ANY shopping context to work from (a destination, activity, or occasion) -
   even if no item type was named. Infer one broad best-guess category (e.g.

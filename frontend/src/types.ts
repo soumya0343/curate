@@ -24,6 +24,7 @@ export interface ResultGroup {
   label: string;
   recommendations: Recommendation[];
   empty_reason: string | null;
+  fallback_note: string | null;
 }
 
 export interface RecommendResponse {
@@ -38,4 +39,41 @@ export interface RecommendResponse {
 
 export interface ApiError {
   error: { code: string; message: string; retryable: boolean };
+}
+
+export interface ProductRef {
+  id: string;
+  title: string;
+  price: number;
+  image_url: string;
+  product_url: string;
+}
+
+export interface CartItem extends ProductRef {
+  quantity: number;
+}
+
+export type WishlistItem = ProductRef;
+
+export interface ProductSummary {
+  id: string;
+  title: string;
+  domain: string | null;
+  category: string;
+  subcategory: string | null;
+  price: number;
+  currency: string;
+  price_tier: string;
+  rating: number;
+  reviews: number;
+  image_url: string | null;
+  product_url: string | null;
+}
+
+export interface CatalogueResponse {
+  total: number;
+  page: number;
+  page_size: number;
+  pages: number;
+  items: ProductSummary[];
 }

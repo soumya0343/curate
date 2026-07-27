@@ -1,7 +1,7 @@
 # Render blueprint for the FastAPI backend (backend/Dockerfile). See
-# docs/deployment.md for the full walkthrough, including why --workers 1 is
-# mandatory (in-memory sessions), the three most likely failure modes, and
-# the free-tier cold-start caveat.
+# DEPLOYMENT.md (repo root) for the full walkthrough, including why --workers 1
+# is mandatory (in-memory sessions), the most likely failure modes, and the
+# free-tier cold-start caveat.
 services:
   - type: web
     name: shopping-assistant-api
@@ -19,6 +19,8 @@ services:
         sync: false
       - key: GROQ_API_KEY
         sync: false
+      - key: JINA_API_KEY
+        sync: false
 
       # Comma-separated list, split by Settings._split_origins
       # (backend/app/config.py:32-37). Must include the production Vercel
@@ -27,6 +29,16 @@ services:
       # here.
       - key: CORS_ORIGINS
         sync: false
+
+      # The committed catalogue (backend/data/) was built with Jina embeddings
+      # (see DEPLOYMENT.md §8), NOT the Settings default (gemini-embedding-001)
+      # - these two must be set explicitly or the container crash-loops on
+      # ManifestMismatch at startup (DEPLOYMENT.md §5a). Not a "has a working
+      # default" line like the ones below; do not comment this out.
+      - key: EMBEDDING_MODEL
+        value: jina-embeddings-v3
+      - key: EMBEDDING_DIMS
+        value: "768"
 
       # --- Everything below has a working default in Settings and does NOT
       # need to be set for the real (non-mock) deployment. They are listed so
@@ -37,10 +49,6 @@ services:
       #   value: gemini
       # - key: GENERATION_FALLBACK
       #   value: groq
-      # - key: EMBEDDING_MODEL
-      #   value: gemini-embedding-001
-      # - key: EMBEDDING_DIMS
-      #   value: "768"
       # - key: DATA_DIR
       #   value: /app/data
       # - key: SESSION_TTL_SECONDS
@@ -49,7 +57,7 @@ services:
       #   value: "30.0"
       #
       # To deploy the mock-data variant instead (no API keys, see
-      # docs/deployment.md "deploying with mock data"), set DATA_DIR to
+      # DEPLOYMENT.md §7 "deploying with mock data"), set DATA_DIR to
       # /app/data/mock and set EMBEDDING_MODEL / EMBEDDING_DIMS to whatever
-      # is recorded in backend/data/mock/embeddings.manifest.json once that
-      # file exists — do not guess those values here.
+      # is recorded in backend/data/mock/embeddings.manifest.json instead of
+      # the jina-embeddings-v3 pinning above.

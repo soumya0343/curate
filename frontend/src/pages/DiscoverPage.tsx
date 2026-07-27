@@ -1,5 +1,5 @@
 // frontend/src/pages/DiscoverPage.tsx
-import { AssumptionChips } from "../components/AssumptionChips";
+import { AssumptionChips, statedFactChips } from "../components/AssumptionChips";
 import { InputPanel } from "../components/InputPanel";
 import { RefineBar } from "../components/RefineBar";
 import { ResultGroup } from "../components/ResultGroup";
@@ -9,8 +9,12 @@ import { useRecommendation } from "../hooks/useRecommendation";
 export function DiscoverPage() {
   const { status, response, error, submit, refine, stage, partial, queries } = useRecommendation();
 
-  const assumptions =
-    response?.assumptions ?? partial?.assumptions ?? [];
+  const baseAssumptions = response?.assumptions ?? partial?.assumptions ?? [];
+  const intent = response?.intent ?? partial?.intent;
+  const assumptions = [
+    ...statedFactChips(intent, new Set(baseAssumptions.map((a) => a.field))),
+    ...baseAssumptions,
+  ];
 
   const isActive = stage !== "idle";
 
@@ -61,39 +65,49 @@ export function DiscoverPage() {
           </div>
         )}
 
-        {/* Streaming progress — visible from submit until results land */}
+        {/* Streaming progress — a loud banner, not a faint dot, since old results
+            now stay on screen underneath it and must not read as "up to date" */}
         {stage !== "idle" && stage !== "ready" && stage !== "error" && (
-          <div className="mt-2">
-            {partial && (
-              <AssumptionChips
-                assumptions={partial.assumptions ?? []}
-                questions={partial.clarifying_questions ?? []}
-                onAnswer={refine}
-              />
-            )}
-            <div className="flex items-center gap-2 text-sm text-primary/40">
-              <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-gold-400" />
-              {stage === "understanding"
-                ? "Understanding your request…"
-                : stage === "searching"
-                ? "Searching the catalogue…"
-                : "Choosing the best matches…"}
-            </div>
+          <div className="mb-4 flex items-center gap-2.5 rounded-xl border border-gold-300 bg-gold-50 px-4 py-3 text-sm font-medium text-primary shadow-sm">
+            <span className="inline-block h-2.5 w-2.5 animate-pulse rounded-full bg-gold-500" />
+            {stage === "understanding"
+              ? "Understanding your request…"
+              : stage === "searching"
+              ? "Searching the catalogue…"
+              : "Choosing the best matches…"}
           </div>
         )}
+        {partial && stage !== "idle" && stage !== "ready" && stage !== "error" && (
+          <AssumptionChips
+            assumptions={[
+              ...statedFactChips(partial.intent, new Set((partial.assumptions ?? []).map((a) => a.field))),
+              ...(partial.assumptions ?? []),
+            ]}
+            questions={partial.clarifying_questions ?? []}
+            onAnswer={refine}
+          />
+        )}
 
-        {/* Results */}
-        {status === "ready" && response && (
-          <div>
-            <AssumptionChips
-              assumptions={response.assumptions}
-              questions={response.clarifying_questions}
-              onAnswer={refine}
-            />
-            {response.clarifying_questions.length > 0 && (
-              <p className="mb-4 text-sm text-primary/50">
-                Meanwhile, while you think that over — here's what I'd suggest based on what I assumed:
-              </p>
+        {/* Results — stay visible (dimmed) while a follow-up is loading, rather
+            than disappearing the instant a new request starts */}
+        {response && (
+          <div className={status === "loading" ? "pointer-events-none opacity-40 transition-opacity" : ""}>
+            {status === "ready" && (
+              <>
+                <AssumptionChips
+                  assumptions={[
+                    ...statedFactChips(response.intent, new Set(response.assumptions.map((a) => a.field))),
+                    ...response.assumptions,
+                  ]}
+                  questions={response.clarifying_questions}
+                  onAnswer={refine}
+                />
+                {response.clarifying_questions.length > 0 && (
+                  <p className="mb-4 text-sm text-primary/50">
+                    Meanwhile, while you think that over — here's what I'd suggest based on what I assumed:
+                  </p>
+                )}
+              </>
             )}
             {response.relaxations.map((note) => (
               <p key={note} className="mb-3 rounded-xl border border-gold-200 bg-gold-50 p-3 text-sm text-primary/70">

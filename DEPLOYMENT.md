@@ -1,15 +1,68 @@
 # Deployment: Render (backend) + Vercel (frontend)
 
-Status: **planning only**. Nothing in this document has been deployed, and no
-network or build command has been run to produce it. It exists so someone can
-execute a real deploy later without re-deriving these decisions. See the
-closing checklist for what still blocks an actual deploy.
+Status: **not yet deployed, but unblocked**. As of this revision the two
+substantive blockers that used to sit here — no real catalogue committed, and
+an unverified dataset licence — are both resolved (real catalogue: §0/§8;
+licence: `ATTRIBUTION.md`, checked and permissive). What's left is mechanical:
+create the two services and set env vars. §0 is the ordered checklist for
+that. Sections 1-7 are the reference material §0 points into; §8 is what
+genuinely remains outstanding.
 
 Files this plan produced: `backend/Dockerfile`, `backend/.dockerignore`,
 `render.yaml` (repo root), `frontend/vercel.json`, this document.
 
 This lives at the repo root rather than under `docs/` because `docs/` is
 gitignored — a deployment plan nobody can read is not a deployment plan.
+
+## 0. Execution checklist — do this, in order, to go live
+
+Estimated end-to-end: 30-45 minutes, almost all of it Render/Vercel dashboard
+clicking rather than anything code-related. Nothing below requires a code
+change; every file this needs (`Dockerfile`, `render.yaml`, `vercel.json`) is
+already committed.
+
+1. **Push the current branch to the branch Render/Vercel will watch.**
+   Both platforms deploy from a specific branch — decide which (`master` or
+   this feature branch) before connecting the repo, since evaluators will look
+   at whatever branch the live URL is actually built from.
+2. **Create the Render Blueprint.** Render dashboard → New → Blueprint → pick
+   this repo → it reads `render.yaml` from the repo root automatically.
+3. **Set backend env vars in Render's dashboard** (declared `sync: false` in
+   `render.yaml`, so Render prompts for them rather than reading them from the
+   file — nothing secret ever touches git). Pull the values from the local
+   `backend/.env` (already populated, not committed):
+   - `GEMINI_API_KEY`, `GROQ_API_KEY` (or whichever providers are in the chain)
+   - `EMBEDDING_MODEL=jina-embeddings-v3` and `EMBEDDING_DIMS=768`, plus
+     `JINA_API_KEY` — **this is a change from the config default**
+     (`gemini-embedding-001`). The catalogue actually committed at
+     `backend/data/` was built with Jina embeddings (§8), so the default must
+     be overridden or the container crash-loops on `ManifestMismatch` at
+     startup (§5a). This is the single most likely first-deploy failure.
+   - `CORS_ORIGINS` — leave a placeholder for now (e.g. `http://localhost:5173`),
+     it gets updated in step 6 once the Vercel domain exists.
+4. **Deploy the backend, then verify it standalone before touching the
+   frontend** — run both `curl` checks in §2 against the Render URL. A clean
+   JSON response from `/api/recommend` here means the catalogue loaded, the
+   manifest matched, and both API keys work — the two hardest things to debug
+   once the frontend is also in the loop, so confirm them here first.
+5. **Create the Vercel project**, root directory `frontend/`, set
+   `VITE_API_BASE_URL` to the Render URL from step 4 (§3 step 2). Deploy.
+6. **Close the loop: add the Vercel production domain to the backend's
+   `CORS_ORIGINS`** (§3 step 4) and redeploy the backend — env var changes need
+   a redeploy, `Settings` is constructed once via `lru_cache`. Skipping this
+   step is the second most likely failure, and it only shows up once the
+   frontend actually tries to call the backend (§5b).
+7. **Manual smoke test against the live frontend URL**: submit one of the
+   assignment's example queries end to end, confirm streaming renders in
+   stages (assumption chips before results, not everything at once — §5c),
+   confirm product links resolve to real Amazon pages.
+8. **Record the demo video against this live URL**, not localhost — and read
+   §6 first, since a cold Render free-tier container can take ~50s on the
+   first request and that needs to be a conscious choice (accept + narrate it,
+   ping it warm beforehand, or move off the free tier) rather than a surprise
+   mid-recording.
+9. **Put the live URL and the branch it was deployed from in the README**,
+   per the assignment's deliverables list.
 
 ## 1. Prerequisites
 
@@ -29,7 +82,8 @@ each field to its uppercased name unless told otherwise):
 
 | Variable | Config field | Default | Notes |
 |---|---|---|---|
-| `GEMINI_API_KEY` | `gemini_api_key` | `None` | Required for real embeddings — `_build_embedding` raises `ProviderUnavailable` if unset, because embeddings have no fallback provider (query vectors must share the catalogue's vector space). **Not required when `EMBEDDING_MODEL=hashing-bow-v1`**, the keyless lexical embedder used by the mock catalogue (§7). |
+| `GEMINI_API_KEY` | `gemini_api_key` | `None` | Required for Gemini generation, and for Gemini embeddings if `EMBEDDING_MODEL=gemini-embedding-001`. Not required for embeddings on this deployment, since `EMBEDDING_MODEL` must be `jina-embeddings-v3` here (see that row below) — but still needed if `gemini` is anywhere in the generation chain. |
+| `JINA_API_KEY` | `jina_api_key` | `None` | **Required for this deployment.** `_build_embedding` raises `ProviderUnavailable` if unset when `EMBEDDING_MODEL=jina-embeddings-v3`, because embeddings have no fallback provider (query vectors must share the catalogue's vector space). Not required only when `EMBEDDING_MODEL=hashing-bow-v1`, the keyless lexical embedder used by the mock catalogue (§7). |
 | `GROQ_API_KEY` | `groq_api_key` | `None` | Needed only if `groq` appears in the chain. A provider with no key is skipped, not fatal. |
 | `CEREBRAS_API_KEY` | `cerebras_api_key` | `None` | Same. Cerebras is called over its OpenAI-compatible HTTP API. |
 | `GITHUB_TOKEN` | `github_token` | `None` | GitHub Models. A **personal access token with the `models:read` scope**, not an API key — hence the different name. Free, low daily ceiling. |
@@ -41,8 +95,8 @@ each field to its uppercased name unless told otherwise):
 | `GITHUB_MODEL` | `github_model` | `"openai/gpt-4o-mini"` | GitHub Models ids are publisher-qualified (`openai/…`, `meta/…`, `mistral-ai/…`). |
 | `GITHUB_BASE_URL` | `github_base_url` | `"https://models.github.ai/inference"` | |
 | `GENERATION_FALLBACK` | `generation_fallback` | `"groq"` | Same constraint; set to empty/None to disable fallback. |
-| `EMBEDDING_MODEL` | `embedding_model` | `"gemini-embedding-001"` | **Pinned to whatever built the committed embeddings.** Changing it without rebuilding `embeddings.npy` trips `ManifestMismatch` (`app/catalogue/index.py:49-53`) by design — do not "fix" that check. |
-| `EMBEDDING_DIMS` | `embedding_dims` | `768` | Same constraint, checked at `app/catalogue/index.py:54-56`. |
+| `EMBEDDING_MODEL` | `embedding_model` | `"gemini-embedding-001"` | **Must be overridden to `jina-embeddings-v3` for this deployment.** The config default no longer matches what's committed at `backend/data/` — that catalogue was built with Jina (§8) — so leaving the default unset trips `ManifestMismatch` (`app/catalogue/index.py:49-53`) at startup. Pin it to whatever actually built the committed embeddings; do not "fix" the check itself. |
+| `EMBEDDING_DIMS` | `embedding_dims` | `768` | Same constraint, checked at `app/catalogue/index.py:54-56`. Happens to be `768` for both Gemini and Jina, so this one doesn't need overriding — only the model name does. |
 | `DATA_DIR` | `data_dir` | `<repo>/backend/data` | In the container this resolves to `/app/data` (WORKDIR is `/app`, and the default is `Path(__file__).parent.parent / "data"` relative to `app/config.py`). Override to `/app/data/mock` for the mock-data variant (§6). |
 | `CORS_ORIGINS` | `cors_origins` | `["http://localhost:5173"]` | Comma-separated string, split by `_split_origins` (`config.py:32-37`). Must include the deployed Vercel production domain (see §5b) — preview domains are covered separately. |
 | `SESSION_TTL_SECONDS` | `session_ttl_seconds` | `1800` | How long a session survives in the in-memory store (`app/services/sessions.py`). |
@@ -260,21 +314,30 @@ raises `ManifestMismatch` at startup rather than serving nonsense (§5a).
 
 ## 8. What is NOT done yet (blocks a real deploy)
 
-- No real catalogue is committed for production use — `backend/data/` today
-  holds the raw ~640 MB source CSV
-  (`amz_in_total_products_data_processed.csv`, confirmed via `du -sh`:
-  `639M`) and a `profile.json`, not the built `catalogue.jsonl.gz` /
-  `embeddings.npy` / `embeddings.manifest.json` that `app/catalogue/index.py`
-  actually loads. Until those exist, the default `DATA_DIR` has no manifest to
-  read and the container fails at startup — deploy the mock variant (§7) or
-  wait for the real pipeline.
-- The Kaggle dataset's licence has not been verified as clear for a public,
-  deployed service. This must be resolved before deploying with the real
-  catalogue rather than the mock one.
-- No `GEMINI_API_KEY` or `GROQ_API_KEY` has been provisioned or set anywhere
-  (Render dashboard, local `.env`, or otherwise).
-- Neither service has actually been created in Render or Vercel; this
-  document and the four config files are preparation, not a deployment.
+Two items that used to block this are resolved and kept here only as a
+record:
 
-None of these block the mock-data deployment in §7, which needs no catalogue,
-no licence decision, and no keys. They block deploying the *real* one.
+- ~~No real catalogue is committed for production use~~ — resolved.
+  `backend/data/` now holds the built `catalogue.jsonl.gz` / `embeddings.npy` /
+  `embeddings.manifest.json`: 6,000 real Amazon India products with real
+  `jina-embeddings-v3` vectors (`synthetic: false` in the manifest), built via
+  `scripts/ingest_enriched.py --embedder jina`. **Consequence for deployment:**
+  the config default `EMBEDDING_MODEL=gemini-embedding-001` no longer matches
+  what's committed — `EMBEDDING_MODEL=jina-embeddings-v3` /
+  `EMBEDDING_DIMS=768` must be set explicitly wherever this deploys (§0 step 3),
+  or startup fails with `ManifestMismatch` (§5a).
+- ~~The Kaggle dataset's licence has not been verified~~ — resolved. See
+  `ATTRIBUTION.md`: checked, ODC-By v1.0, permissive, commercial use and
+  derivative databases explicitly granted; this repo's obligations under it
+  (attribution notice, no sublicensing) are met.
+
+What's actually still outstanding:
+
+- Keys exist locally (`backend/.env`, not committed) but have not been copied
+  into Render's dashboard — mechanical, §0 step 3.
+- Neither service has actually been created in Render or Vercel yet — this
+  document and the four config files are preparation, not a deployment. §0 is
+  the checklist to close this.
+
+None of the above block the mock-data deployment in §7, which needs no
+catalogue, no licence decision, and no keys — it was never blocked.

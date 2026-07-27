@@ -25,6 +25,7 @@ export function useRecommendation() {
         sessionId.current = data.session_id;
         setPartial({
           session_id: data.session_id,
+          intent: data.intent,
           assumptions: data.assumptions,
           clarifying_questions: data.clarifying_questions,
         } as Partial<RecommendResponse>);
@@ -37,7 +38,7 @@ export function useRecommendation() {
         setPartial((current) => {
           setResponse({
             session_id: sessionId.current ?? "",
-            intent: {},
+            intent: current?.intent ?? {},
             assumptions: current?.assumptions ?? [],
             clarifying_questions: current?.clarifying_questions ?? [],
             groups: data.groups,

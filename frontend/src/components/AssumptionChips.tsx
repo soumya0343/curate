@@ -1,7 +1,48 @@
 import { useState } from "react";
 import type { Assumption } from "../types";
 
-const VERIFIED_FIELDS = new Set(["budget", "price", "min_price", "max_price"]);
+// Fields the customer stated outright rather than something the model guessed -
+// shown with a checkmark instead of a confidence label, same as a verified
+// product attribute (spec: assumptions are for judgement calls, not facts).
+const VERIFIED_FIELDS = new Set([
+  "budget", "price", "min_price", "max_price",
+  "destination", "activity", "occasion", "gender", "duration",
+]);
+
+const INTENT_FIELD_LABELS: Record<string, (value: unknown) => string | null> = {
+  destination: (v) => String(v),
+  activity: (v) => String(v),
+  occasion: (v) => String(v),
+  gender: (v) => (v === "unisex" ? null : String(v)), // unisex already shown as an assumption when defaulted
+  season: (v) => String(v),
+  duration_days: (v) => `${v} day${Number(v) === 1 ? "" : "s"}`,
+  budget_max: (v) => `Under ₹${Number(v).toLocaleString("en-IN")}`,
+};
+
+const INTENT_FIELD_NAMES: Record<string, string> = {
+  duration_days: "duration", budget_max: "budget",
+};
+
+/** Stated facts (destination, budget, gender, ...) never show up in `assumptions` -
+ * those are reserved for the model's inferred guesses. Build chips for the facts
+ * too, so a customer sees confirmation of what they explicitly told the app. */
+export function statedFactChips(
+  intent: Record<string, unknown> | undefined,
+  alreadyShown: Set<string>,
+): Assumption[] {
+  if (!intent) return [];
+  const chips: Assumption[] = [];
+  for (const [key, format] of Object.entries(INTENT_FIELD_LABELS)) {
+    const raw = intent[key];
+    if (raw === null || raw === undefined) continue;
+    const field = INTENT_FIELD_NAMES[key] ?? key;
+    if (alreadyShown.has(field)) continue;
+    const value = format(raw);
+    if (!value) continue;
+    chips.push({ field, value, reason: "You told me this", confidence: "high", editable: false });
+  }
+  return chips;
+}
 
 export function AssumptionChips({
   assumptions, questions, onAnswer,

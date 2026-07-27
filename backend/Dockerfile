@@ -35,11 +35,11 @@ COPY data ./data
 
 # `data/` also contains the ~640 MB source CSV
 # (backend/data/amz_in_total_products_data_processed.csv, see `du -sh` output
-# in docs/deployment.md) that a naive `COPY data ./data` would happily bake
+# in DEPLOYMENT.md) that a naive `COPY data ./data` would happily bake
 # into the image. backend/.dockerignore excludes it (and other offline-only
 # artifacts) so this COPY only ships catalogue.jsonl.gz, embeddings.npy, and
 # embeddings.manifest.json — the three files app/catalogue/index.py actually
-# reads at startup. See docs/deployment.md for the full trap writeup.
+# reads at startup. See DEPLOYMENT.md for the full trap writeup.
 
 # Single worker: sessions are a process-local in-memory TTL dict
 # (app/services/sessions.py) — with more than one worker, a session created on

@@ -10,6 +10,7 @@ export function TopNavBar() {
         </Link>
         <nav className="hidden items-center gap-6 text-sm text-primary/60 sm:flex">
           <Link to="/" className="transition hover:text-primary">Discover</Link>
+          <Link to="/explore" className="transition hover:text-primary">Explore</Link>
         </nav>
         <div className="w-24" />
       </div>

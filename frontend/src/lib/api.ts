@@ -1,4 +1,4 @@
-import type { ApiError, RecommendResponse } from "../types";
+import type { ApiError, CatalogueResponse, RecommendResponse } from "../types";
 
 const BASE = import.meta.env.VITE_API_BASE_URL ?? "";
 
@@ -34,6 +34,20 @@ export async function recommend(
     );
   }
   return body as RecommendResponse;
+}
+
+export async function listCatalogue(page: number, pageSize = 20): Promise<CatalogueResponse> {
+  const response = await fetch(`${BASE}/api/catalogue?page=${page}&page_size=${pageSize}`);
+  const body = await response.json();
+  if (!response.ok) {
+    const { error } = body as ApiError;
+    throw new ApiFailure(
+      error?.code ?? "INTERNAL",
+      error?.message ?? "Something went wrong.",
+      error?.retryable ?? false,
+    );
+  }
+  return body as CatalogueResponse;
 }
 
 export interface SseFrame {

@@ -36,6 +36,10 @@ Return ONLY JSON:
 
 RULES:
 - Use ONLY product ids from the candidate list. Never invent one.
+- Each pick's product_id MUST come from a candidate whose group= matches the
+  group label exactly. Never use a candidate from a different group — even if
+  it seems relevant. A trekking-gear candidate must never appear in a clothing
+  group and vice versa.
 - Facts marked "verified" may be stated as fact. Everything else is a judgement -
   phrase it as suitability ("suited to cold-weather trekking"), never as a
   specification ("rated to -12C").
@@ -76,6 +80,9 @@ def build_groups(payload: dict, candidates: list[Candidate],
 
     groups: list[ResultGroup] = []
     for sub_need in sub_needs:
+        # Hard guard: only allow products that were actually retrieved for this
+        # sub-need. This catches any cross-group picks the LLM sneaks in.
+        valid_ids = {c.product.id for c in by_sub_need.get(sub_need.label, [])}
         recommendations: list[Recommendation] = []
         for pick in picks_by_label.get(sub_need.label, []):
             if not isinstance(pick, dict):
@@ -83,6 +90,8 @@ def build_groups(payload: dict, candidates: list[Candidate],
             product = by_id.get(str(pick.get("product_id")))
             if product is None:
                 continue  # hallucinated id - dropped
+            if product.id not in valid_ids:
+                continue  # cross-group pick - dropped
             recommendations.append(Recommendation(
                 product_id=product.id, title=product.title, price=product.price,
                 price_tier=product.price_tier, rating=product.rating,

@@ -1,5 +1,5 @@
 import { useCallback, useRef, useState } from "react";
-import { ApiFailure, recommend, recommendStream } from "../lib/api";
+import { ApiFailure, recommendStream } from "../lib/api";
 import type { RecommendResponse } from "../types";
 
 type Status = "idle" | "loading" | "ready" | "error";
@@ -11,32 +11,15 @@ export function useRecommendation() {
   const [error, setError] = useState<ApiFailure | null>(null);
   const [stage, setStage] = useState<Stage>("idle");
   const [partial, setPartial] = useState<Partial<RecommendResponse> | null>(null);
+  const [queries, setQueries] = useState<string[]>([]);
   const sessionId = useRef<string | undefined>(undefined);
 
-  const run = useCallback(async (query: string, useSession: boolean) => {
-    setStatus("loading");
-    setError(null);
-    try {
-      const result = await recommend(query, useSession ? sessionId.current : undefined);
-      sessionId.current = result.session_id;
-      setResponse(result);
-      setStatus("ready");
-    } catch (err) {
-      setError(err instanceof ApiFailure
-        ? err
-        : new ApiFailure("INTERNAL", "Something went wrong.", false));
-      setStatus("error");
-    }
-  }, []);
-
-  const submit = useCallback((query: string) => run(query, false), [run]);
-  const refine = useCallback((query: string) => run(query, true), [run]);
-
   const submitStreaming = useCallback(async (query: string, useSession = false) => {
+    setQueries((prev) => (useSession ? [...prev, query] : [query]));
     setStatus("loading");
     setStage("understanding");
     setError(null);
-    setResponse(null);
+    setPartial(null);
     await recommendStream(query, useSession ? sessionId.current : undefined, {
       onUnderstood: (data) => {
         sessionId.current = data.session_id;
@@ -70,5 +53,8 @@ export function useRecommendation() {
     });
   }, []);
 
-  return { status, response, error, submit, refine, stage, partial, submitStreaming };
+  const submit = useCallback((query: string) => submitStreaming(query, false), [submitStreaming]);
+  const refine = useCallback((query: string) => submitStreaming(query, true), [submitStreaming]);
+
+  return { status, response, error, submit, refine, stage, partial, queries };
 }

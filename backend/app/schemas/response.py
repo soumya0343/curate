@@ -29,6 +29,7 @@ class ResultGroup(BaseModel):
     label: str
     recommendations: list[Recommendation] = []
     empty_reason: str | None = None
+    fallback_note: str | None = None
 
 
 class RecommendResponse(BaseModel):

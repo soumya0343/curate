@@ -38,10 +38,18 @@ class RecommendationPipeline:
         try:
             # Stage 1 - understand
             t0 = time.perf_counter()
-            prior = self.sessions.get(sid) if session_id else None
+            prior_state = self.sessions.get(sid) if session_id else None
+            prior_intent = prior_state.intent if prior_state else None
+            prior_sub_needs = prior_state.sub_needs if prior_state else None
+            history = prior_state.history if prior_state else []
+            # A follow-up like "total budget is 10k" is meaningless on its own -
+            # sub-need decomposition needs the full conversation so it doesn't
+            # invent unrelated categories from an isolated fragment.
+            conversation = "\n".join([*history, query])
             result = await intent_service.extract(
-                self.generator, query, prior, request_id=request_id)
-            self.sessions.put(sid, result.intent)
+                self.generator, conversation, prior_intent, request_id=request_id,
+                prior_sub_needs=prior_sub_needs)
+            self.sessions.put(sid, result.intent, [*history, query], result.sub_needs)
             timings["intent"] = (time.perf_counter() - t0) * 1000
             log_stage(request_id, "intent", duration_ms=timings["intent"],
                       sub_needs=len(result.sub_needs))

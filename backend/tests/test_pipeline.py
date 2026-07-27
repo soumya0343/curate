@@ -89,7 +89,7 @@ async def test_session_intent_persists_for_follow_up(index):
         sessions=sessions)
     events = [e async for e in pipe.run("trek gear", None, request_id="r")]
     sid = collect(events).session_id
-    assert sessions.get(sid).activity == "trekking"
+    assert sessions.get(sid).intent.activity == "trekking"
 
 
 async def test_follow_up_merges_onto_prior_intent(index):
@@ -117,14 +117,15 @@ async def test_follow_up_merges_onto_prior_intent(index):
     assert events[0].data["session_id"] == sid
 
 
-async def test_empty_group_is_reported_not_hidden(index):
-    """The model returning no picks must still yield the group, with a reason."""
+async def test_empty_group_falls_back_to_closest_candidates(index):
+    """The model returning no picks must still surface something via a fallback."""
     pipe = _pipeline(index, rerank_payload={"groups": []})
     events = [e async for e in pipe.run("trek gear", None, request_id="r")]
     group = collect(events).groups[0]
     assert group.label == "Backpack"
-    assert group.recommendations == []
-    assert group.empty_reason
+    assert group.recommendations != []
+    assert group.fallback_note
+    assert group.empty_reason is None
 
 
 async def test_provider_failure_emits_error_event(index):

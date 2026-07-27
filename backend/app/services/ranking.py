@@ -11,7 +11,10 @@ from app.schemas.intent import ShoppingIntent, SubNeed
 from app.schemas.response import Candidate, Recommendation, ResultGroup
 
 MAX_PICKS_PER_GROUP = 5
-EMPTY_REASON = "No suitable match found in the catalogue for this need."
+EMPTY_REASON = "Sorry, I couldn't find anything close to this in the catalogue right now."
+FALLBACK_NOTE = ("Sorry, I don't have an exact match for this — here are the closest "
+                 "alternatives I could find instead.")
+FALLBACK_REASON = "Closest match available — not an exact fit for this request."
 
 RERANK_PROMPT = """You are a shopping assistant choosing final recommendations.
 
@@ -62,6 +65,10 @@ def build_groups(payload: dict, candidates: list[Candidate],
     model returned picks for it - empty groups are reported, not hidden.
     """
     by_id = {c.product.id: c.product for c in candidates}
+    by_sub_need: dict[str, list[Candidate]] = {}
+    for c in candidates:
+        by_sub_need.setdefault(c.sub_need, []).append(c)
+
     picks_by_label: dict[str, list[dict]] = {}
     for raw in payload.get("groups") or []:
         if isinstance(raw, dict) and raw.get("label"):
@@ -85,9 +92,26 @@ def build_groups(payload: dict, candidates: list[Candidate],
             if len(recommendations) >= MAX_PICKS_PER_GROUP:
                 break
 
+        # The LLM found nothing worth recommending for this sub-need. Rather than
+        # leaving the customer with a bare "nothing found", fall back to the
+        # closest-scoring retrieved candidates so there's still something to look at.
+        fallback_note = None
+        if not recommendations:
+            pool = sorted(by_sub_need.get(sub_need.label, []),
+                          key=lambda c: c.score, reverse=True)
+            for c in pool[:MAX_PICKS_PER_GROUP]:
+                recommendations.append(Recommendation(
+                    product_id=c.product.id, title=c.product.title, price=c.product.price,
+                    price_tier=c.product.price_tier, rating=c.product.rating,
+                    reviews=c.product.reviews, image_url=c.product.image_url,
+                    product_url=c.product.product_url, reason=FALLBACK_REASON))
+            if recommendations:
+                fallback_note = FALLBACK_NOTE
+
         groups.append(ResultGroup(
             label=sub_need.label, recommendations=recommendations,
-            empty_reason=None if recommendations else EMPTY_REASON))
+            empty_reason=None if recommendations else EMPTY_REASON,
+            fallback_note=fallback_note))
     return groups
 
 

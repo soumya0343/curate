@@ -37,13 +37,23 @@ def test_hallucinated_product_ids_are_dropped():
     assert ids == ["A"], "the model must never be able to invent a product"
 
 
-def test_missing_group_is_reported_as_empty_not_hidden():
+def test_missing_group_falls_back_to_closest_candidates_when_available():
     payload = {"groups": [{"label": "Bags", "picks": [
         {"product_id": "A", "reason": "ok"}]}]}
     groups = build_groups(payload, CANDS, SUBS)
     shoes = next(g for g in groups if g.label == "Shoes")
-    assert shoes.recommendations == []
-    assert shoes.empty_reason is not None
+    assert [r.product_id for r in shoes.recommendations] == ["C"]
+    assert shoes.empty_reason is None
+    assert shoes.fallback_note is not None
+
+
+def test_group_with_no_candidates_at_all_is_reported_as_empty():
+    subs = SUBS + [SubNeed(label="Hats", query="sun hat")]
+    groups = build_groups({"groups": []}, CANDS, subs)
+    hats = next(g for g in groups if g.label == "Hats")
+    assert hats.recommendations == []
+    assert hats.empty_reason is not None
+    assert hats.fallback_note is None
 
 
 def test_group_the_model_invented_is_ignored():

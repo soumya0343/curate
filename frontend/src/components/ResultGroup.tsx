@@ -10,10 +10,17 @@ export function ResultGroup({ group }: { group: Group }) {
           {group.empty_reason}
         </p>
       ) : (
-        <div className="grid gap-3">
-          {group.recommendations.map((item) => (
-            <ProductCard key={item.product_id} item={item} />
-          ))}
+        <div>
+          {group.fallback_note && (
+            <p className="mb-3 rounded-xl border border-gold-200 bg-gold-50 p-3 text-sm text-primary/70">
+              {group.fallback_note}
+            </p>
+          )}
+          <div className="grid gap-3">
+            {group.recommendations.map((item) => (
+              <ProductCard key={item.product_id} item={item} />
+            ))}
+          </div>
         </div>
       )}
     </section>

@@ -74,6 +74,12 @@ already committed.
 - Docker is only needed if you want to build the backend image locally to
   sanity-check it before pushing; Render builds it server-side from
   `backend/Dockerfile`.
+- No database to provision. Catalogue browsing used to run through a
+  Postgres instance seeded one-way from the same JSONL `/api/recommend`
+  already loads (`app/catalogue/browse.py`'s docstring has the full
+  rationale); it now reads that same in-memory list directly. No
+  `DATABASE_URL`, no third service to stand up, and no "database
+  unreachable" failure mode to plan around in §5.
 
 ### Backend environment variables
 
@@ -90,7 +96,7 @@ each field to its uppercased name unless told otherwise):
 | `GEMINI_API_KEYS` / `GROQ_API_KEYS` / `CEREBRAS_API_KEYS` / `GITHUB_TOKENS` | `*_api_keys`, `github_tokens` | `[]` | Comma-separated. Several credentials for one provider; a rate limit rotates to the next and retries. Merged with the singular form. |
 | `GENERATION_CHAIN` | `generation_chain` | unset | Ordered, comma-separated, e.g. `gemini,cerebras,groq,github`. Overrides the two settings below. |
 | `GENERATION_PRIMARY` | `generation_primary` | `"gemini"` | Legacy pair, used when `GENERATION_CHAIN` is unset. `"gemini"`, `"groq"`, `"cerebras"`, `"github"`, or `"mock"` — `mock` is the keyless rule-based provider (§7) and ends any chain it appears in. |
-| `CEREBRAS_MODEL` | `cerebras_model` | `"llama-3.3-70b"` | Configurable so a model rename is an env change, not a code change. |
+| `CEREBRAS_MODEL` | `cerebras_model` | `"gpt-oss-120b"` | Configurable so a model rename is an env change, not a code change. |
 | `CEREBRAS_BASE_URL` | `cerebras_base_url` | `"https://api.cerebras.ai/v1"` | |
 | `GITHUB_MODEL` | `github_model` | `"openai/gpt-4o-mini"` | GitHub Models ids are publisher-qualified (`openai/…`, `meta/…`, `mistral-ai/…`). |
 | `GITHUB_BASE_URL` | `github_base_url` | `"https://models.github.ai/inference"` | |
@@ -271,7 +277,7 @@ free-tier idle behaviour).
 ## 7. Running and deploying with mock data — no API keys at all
 
 A synthetic catalogue now exists at `backend/data/mock/`, built by
-`backend/scripts/build_mock_catalogue.py`: 79 invented products across 14
+`backend/scripts/build_mock_catalogue.py`: 157 invented products across 25
 categories, in the real catalogue schema, with a matching
 `embeddings.manifest.json`. Rebuild it any time with:
 

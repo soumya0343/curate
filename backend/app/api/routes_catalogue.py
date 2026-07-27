@@ -1,32 +1,23 @@
-"""Catalogue browsing endpoints backed by Postgres.
+"""Catalogue browsing endpoints.
 
-Browsing only. Recommendation reads the JSONL index instead (see app/db/mock_db.py
-on why these are separate), so nothing here is on the /api/recommend path and a
-database outage costs browsing, not the product.
+Reads the same in-memory product list app/services/retrieval.py searches for
+recommendation (app/catalogue/browse.py) - not a second store. See that
+module's docstring for why a separate database was dropped.
 """
 from typing import Any, Literal
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 
+from app.api.deps import get_products
+from app.catalogue import browse
 from app.core.errors import NotFound
-from app.db.mock_db import get_connection
+from app.schemas.product import Product
 
 router = APIRouter(prefix="/api/catalogue", tags=["catalogue"])
 
 PriceTier = Literal["budget", "mid", "premium", "luxury"]
 SortBy = Literal["price", "rating", "reviews", "quality_score", "title"]
-
-# Whitelist, not a passthrough: sort_by is interpolated into the SQL string
-# because a column name cannot be a bound parameter. Literal[] rejects anything
-# unlisted at the FastAPI layer and this dict is the second gate.
-SORT_COLUMNS: dict[str, str] = {
-    "price": "price",
-    "rating": "rating",
-    "reviews": "reviews",
-    "quality_score": "quality_score",
-    "title": "title",
-}
 
 
 class ProductSummary(BaseModel):
@@ -68,8 +59,24 @@ class DomainCount(BaseModel):
     count: int
 
 
+def _to_summary(p: Product) -> ProductSummary:
+    return ProductSummary(
+        id=p.id, title=p.title, domain=p.domain, category=p.category,
+        subcategory=p.subcategory, price=p.price, currency=p.currency,
+        price_tier=p.price_tier, rating=p.rating, reviews=p.reviews,
+        image_url=p.image_url, product_url=p.product_url)
+
+
+def _to_detail(p: Product) -> ProductDetail:
+    return ProductDetail(
+        **_to_summary(p).model_dump(),
+        description=p.description, quality_score=p.quality_score,
+        attributes={k: v.model_dump() for k, v in p.attributes.items()})
+
+
 @router.get("", response_model=CatalogueResponse)
 def list_products(
+    products: list[Product] = Depends(get_products),
     domain: str | None = Query(None),
     category: str | None = Query(None),
     price_tier: PriceTier | None = Query(None),
@@ -81,94 +88,34 @@ def list_products(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
 ):
-    conditions: list[str] = []
-    params: list = []
+    filtered = browse.filter_products(
+        products, domain=domain, category=category, price_tier=price_tier,
+        search=search, min_price=min_price, max_price=max_price)
+    ordered = browse.sort_products(filtered, sort_by, order)
+    page_items = browse.paginate(ordered, page, page_size)
 
-    if domain:
-        conditions.append("domain = %s")
-        params.append(domain)
-    if category:
-        conditions.append("category = %s")
-        params.append(category)
-    if price_tier:
-        conditions.append("price_tier = %s")
-        params.append(price_tier)
-    if search:
-        conditions.append("(title ILIKE %s OR description ILIKE %s)")
-        params.extend([f"%{search}%"] * 2)
-    if min_price is not None:
-        conditions.append("price >= %s")
-        params.append(min_price)
-    if max_price is not None:
-        conditions.append("price <= %s")
-        params.append(max_price)
-
-    where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
-    sort_col = SORT_COLUMNS[sort_by]
-    direction = "DESC" if order == "desc" else "ASC"
-    offset = (page - 1) * page_size
-
-    with get_connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute(f"SELECT COUNT(*) AS n FROM products {where}", params)
-            total = cur.fetchone()["n"]
-
-            # `, id` is not decoration: ties on the sort column otherwise order
-            # arbitrarily between the two queries a paginated client makes, so a
-            # product can appear on page 2 having already appeared on page 1, or
-            # be skipped entirely. Ratings tie constantly at this catalogue size.
-            cur.execute(
-                f"""SELECT id, title, domain, category, subcategory, price, currency,
-                           price_tier, rating, reviews, image_url, product_url
-                    FROM products {where}
-                    ORDER BY {sort_col} {direction}, id ASC
-                    LIMIT %s OFFSET %s""",
-                params + [page_size, offset],
-            )
-            items = [ProductSummary(**row) for row in cur.fetchall()]
-
+    total = len(ordered)
     return CatalogueResponse(
-        total=total,
-        page=page,
-        page_size=page_size,
+        total=total, page=page, page_size=page_size,
         pages=(total + page_size - 1) // page_size,
-        items=items,
-    )
+        items=[_to_summary(p) for p in page_items])
 
 
 @router.get("/categories", response_model=list[CategoryCount])
-def list_categories():
+def list_categories(products: list[Product] = Depends(get_products)):
     """Categories with their product counts, for building browse navigation."""
-    with get_connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute("""SELECT category, COUNT(*) AS count
-                           FROM products GROUP BY category ORDER BY category""")
-            return [CategoryCount(**row) for row in cur.fetchall()]
+    return [CategoryCount(category=c, count=n) for c, n in browse.category_counts(products)]
 
 
 @router.get("/domains", response_model=list[DomainCount])
-def list_domains():
+def list_domains(products: list[Product] = Depends(get_products)):
     """Top-level domains with their product counts, one level above category."""
-    with get_connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute("""SELECT domain, COUNT(*) AS count
-                           FROM products WHERE domain IS NOT NULL
-                           GROUP BY domain ORDER BY domain""")
-            return [DomainCount(**row) for row in cur.fetchall()]
+    return [DomainCount(domain=d, count=n) for d, n in browse.domain_counts(products)]
 
 
 @router.get("/{product_id}", response_model=ProductDetail)
-def get_product(product_id: str):
-    with get_connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """SELECT id, title, description, domain, category, subcategory, price,
-                          currency, price_tier, rating, reviews, quality_score, attributes,
-                          image_url, product_url
-                   FROM products WHERE id = %s""",
-                (product_id,),
-            )
-            row = cur.fetchone()
-    if row is None:
+def get_product(product_id: str, products: list[Product] = Depends(get_products)):
+    product = browse.find_product(products, product_id)
+    if product is None:
         raise NotFound(f"Product '{product_id}' not found.")
-    return ProductDetail(**row)
+    return _to_detail(product)

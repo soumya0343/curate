@@ -4,12 +4,12 @@ Curate turns a natural-language shopping request into grouped, explained product
 recommendations. This document covers how, and — more usefully — why each
 decision went the way it did.
 
-The system is two pipelines and one side surface. An **offline** pipeline turns
+The system is two pipelines sharing one store. An **offline** pipeline turns
 1.59M raw CSV rows into a catalogue plus an embedding matrix. A **runtime**
 pipeline turns a query into recommendations against those artifacts. They meet at
-three files in `backend/data/` and nowhere else. Alongside them, a **catalogue
-browsing** API reads a Postgres mirror of the same catalogue — deliberately off
-the recommendation path.
+three files in `backend/data/` and nowhere else. A **catalogue browsing** API
+reads the same loaded catalogue as the runtime pipeline — not a separate
+surface with its own store.
 
 | Document | Covers |
 |---|---|
@@ -125,7 +125,11 @@ subset, top 8 each. Vectors are L2-normalised at build time, so cosine is a plai
 dot product: a NumPy matmul over the subset rows with an `argpartition` top-k.
 
 Results union across sub-needs and deduplicate by product id, keeping the highest
-similarity and the sub-need that produced it.
+similarity and the sub-need that produced it. **This dedup is global, not
+per-sub-need**: two overlapping sub-needs competing for the same product are a
+real mechanism, not a hypothetical — "trekking essentials" and "trekking
+clothing" both surfacing the same jacket is exactly this shape, and only one of
+them keeps it. See [Future improvements](README.md#future-improvements).
 
 ### Stage 4 — Deterministic pre-ranking
 
@@ -150,8 +154,11 @@ boosts can overturn a real similarity gap.
 
 Two properties matter:
 
-- **Sub-needs are ranked independently.** A strong sub-need cannot starve a weak
-  one — every group the user asked for gets its own shot at the LLM.
+- **Sub-needs are ranked independently, from this stage onward.** A strong
+  sub-need cannot starve a weak one *within pre-ranking* — every group gets its
+  own shot at the LLM. This does not undo a collision that already happened one
+  stage earlier: a sub-need can reach Stage 4 with fewer than `top_k` candidates
+  because Stage 3's dedup already gave a shared product to a competing sub-need.
 - **Near-duplicates are demoted, not dropped.** A sub-need whose entire candidate
   pool is colour variants of one product still returns something.
 
@@ -175,9 +182,13 @@ safe to ship:
    attributes explicitly labelled. Anything else must be phrased as suitability
    (*"suited to cold-weather trekking"*), never as a specification (*"rated to
    −12°C"*).
-3. **Empty groups are reported, not hidden.** Output iterates the original
-   sub-needs in order, whether or not the model returned picks. An honest empty
-   group beats a bad recommendation.
+3. **Empty groups are reported, not hidden — with one gap.** Output iterates the
+   original sub-needs in order, whether or not the model returned picks, and an
+   empty group carries a reason string. But `build_groups()` doesn't leave it
+   empty: when the model declines every candidate for a sub-need, it pads the
+   group with the closest-scoring retrieved candidates instead, with no
+   similarity floor gating that fallback — so "empty and honest" can silently
+   become "padded with a weak match." See [Future improvements](README.md#future-improvements).
 
 ## Data trust tiers
 
@@ -292,11 +303,11 @@ sharing "cotton" or "women" scores as highly as one sharing "thermal", so a sear
 for "thermal base layer" can rank a saree above a thermal vest. It is a fixture
 for exercising the machinery, not a retrieval system.
 
-## Storage: files for recommendation, Postgres for browsing
+## Storage: one in-memory catalogue, two access patterns
 
-There is no single database. Two artifacts, on disk, cover two entirely
-different access patterns, and a third store — Postgres — sits off to the side
-of both, wired to only one of them.
+There is no database. One set of artifacts, on disk, loads once into process
+memory, and both `/api/recommend` and `/api/catalogue` read out of that same
+loaded state.
 
 ```mermaid
 flowchart LR
@@ -308,17 +319,13 @@ flowchart LR
     BUILD --> NPY["embeddings.npy\n(vectors, row n)"]
     BUILD --> MANIFEST["embeddings.manifest.json\n(model, dims, count)"]
 
-    JSONL --> SEED["seed_db.py\n(one-way, JSONL → Postgres)"]
-    SEED --> PG[("Postgres\nproducts table")]
-
     JSONL --> INDEX["CatalogueIndex\n(in-process memory)"]
     NPY --> INDEX
     MANIFEST -. "checked at boot\nManifestMismatch" .-> INDEX
 
     INDEX --> RECOMMEND["/api/recommend\n(matmul + top-k)"]
-    PG --> BROWSE["/api/catalogue\n(filter/sort/paginate)"]
+    INDEX --> BROWSE["/api/catalogue\n(filter/sort/paginate)"]
 
-    style PG fill:#336791,color:#fff
     style INDEX fill:#4c6ef5,color:#fff
 ```
 
@@ -367,67 +374,43 @@ brute-force search over it is microseconds, well under the measured 22k-row
 numbers above. `backend/data/mock/` holds a parallel synthetic catalogue of the
 same shape, reachable via `DATA_DIR=data/mock`, for the zero-credential path.
 
-### Catalogue browsing reads Postgres
+### Catalogue browsing reads the same list
 
-`/api/catalogue` filters, sorts and paginates across the whole catalogue — a
-different access pattern, which SQL does well and a NumPy matrix does not.
-`app/db/mock_db.py` (the module name predates the real catalogue; it is a real
-`psycopg2` connection pool, not an in-memory fake — see the module docstring)
-opens a `ThreadedConnectionPool` against `DATABASE_URL` at startup
-(`init_db()`, called from `app/main.py`) and runs inline, idempotent DDL to
-create/patch a single `products` table (`app/db/mock_db.py:31-66`). There is no
-ORM and no migration tool — schema changes are `ALTER TABLE ... ADD COLUMN IF
-NOT EXISTS` statements appended to `CREATE_TABLE`, applied on every boot.
+`/api/catalogue` (`app/api/routes_catalogue.py`) filters, sorts and paginates
+across the same `list[Product]` loaded above, via `app/catalogue/browse.py` —
+pure functions (`filter_products`, `sort_products`, `paginate`,
+`category_counts`, `domain_counts`, `find_product`) with no FastAPI and no I/O,
+reached through a `deps.get_products()` dependency that just returns
+`get_pipeline().index.products`.
 
-`get_connection()` (`app/db/mock_db.py:128-147`), used by
-`app/api/routes_catalogue.py`, is a contextmanager that checks a connection out
-of the pool and always returns it, and raises `CatalogueUnavailable` — the app's
-own error type, not a raw `psycopg2` exception — if the pool was never opened or
-is exhausted, so a database problem surfaces through the normal error envelope
-(503, retryable) instead of an unhandled 500.
+There used to be a second store here: Postgres, seeded one-way from the same
+JSONL by a `scripts/seed_db.py` script, because filter/sort/pagination over a
+Python list felt like reinventing what SQL does natively. It was removed. At
+this catalogue's size — a few thousand rows, read-only, no runtime writes, and
+already resident in process memory for recommendation — that tradeoff didn't
+hold: a second store can't mirror the first any more freshly than just reading
+it directly, and a list comprehension plus a sort over a few thousand rows
+costs microseconds, so there was nothing left for a database to be faster at.
+Against that: a service to provision, a connection pool to size, inline DDL to
+keep idempotent, a `CATALOGUE_UNAVAILABLE` error path for when it was
+unreachable, and a one-way sync script whose only job was keeping a copy from
+drifting out of a first copy that was already authoritative. One data source
+is simpler to reason about than two kept in sync.
 
-Three properties keep the split honest:
+Sorting breaks ties on product `id` ascending, regardless of sort direction:
+Python's `sorted()` is stable, so sorting by `id` first and then doing a second
+stable sort on the real key keeps tied rows (ratings and quality scores tie
+constantly at this size) in deterministic order without a product silently
+appearing on two pages or none.
 
-- **The JSONL is authoritative, Postgres is a mirror.** `scripts/seed_db.py`
-  moves data one way only, JSONL → Postgres, via `products` upserts keyed on
-  `id`. Nothing writes back, and nothing in the app ever writes to
-  `products` outside that script. Line order in the JSONL is pinned to the
-  vector rows; Postgres has no concept of that order and isn't allowed to, which
-  is exactly why it's excluded from the recommendation path rather than merged
-  into it.
-- **Postgres is optional.** `init_db(required=False)` in the lifespan swallows a
-  `psycopg2.Error` — logs a warning and returns `False` — rather than failing
-  app startup. Recommendation needs no Postgres at all, so refusing to boot over
-  one unreachable side-store would take the whole API down to protect a feature
-  that isn't on the critical path.
-- **A database outage costs browsing, not the product.** Which is why
-  `CatalogueUnavailable` is its own error code (503, retryable) rather than a
-  500 — `/api/recommend` keeps working unaffected.
+### If this stops being the right call
 
-Pool size is 10 (`POOL_SIZE`, `app/db/mock_db.py:29`), sized to FastAPI's
-sync-route threadpool rather than to expected traffic: every catalogue route is
-a `def`, so Starlette runs it in a worker thread and each concurrent request
-holds a connection for its whole body. `minconn == maxconn` on purpose —
-`psycopg2` only returns a connection to the OS pool while `len(pool) <
-minconn`, so a `minconn` below `maxconn` would silently open a fresh connection
-per request past that point, which is the cost pooling exists to avoid.
-
-### Why not one database for both
-
-Putting the catalogue matrix in Postgres (e.g. `pgvector`) would mean a network
-round trip per query for something that is currently a same-process array
-lookup, would reintroduce the pre-filter/post-filter tension the file approach
-sidesteps for free, and would make the vector store as fragile as any other
-Postgres dependency — while today a Postgres outage is scoped to browsing only.
-Conversely, putting the browsable catalogue in the JSONL/`.npy` pair would mean
-hand-rolling filter/sort/pagination over a NumPy structure that SQL already
-does correctly. Two stores, chosen for what each is actually good at, is
-cheaper than one store doing both jobs adequately.
-
-**Revisit the file approach at:** ~500k vectors, multiple worker processes each
-needing a consistent view of the matrix, runtime writes to the catalogue, or
-persisted cross-session user state — none of which apply yet (see
-[Known constraints](#known-constraints)).
+Revisit this at: ~500k+ vectors (a same-process array stops being the cheap
+option), multiple worker processes needing a consistent shared view of the
+matrix (a process-local list doesn't help worker B), a runtime write path
+(there isn't one today — the offline pipeline is the only writer), or filter/
+sort needs that a list comprehension expresses worse than SQL would — none of
+which apply yet (see [Known constraints](#known-constraints)).
 
 ## Frontend
 
@@ -483,8 +466,7 @@ app/api/deps.py        provider chain construction, lru_cached pipeline singleto
 app/api/routes_*.py    recommend + catalogue surfaces, error-code → status mapping
 app/schemas/           intent, product, response models
 app/providers/         generation + embedding, real, keyless and stub; key rotation
-app/catalogue/         gzipped-JSONL loader, NumPy index, manifest check
-app/db/                Postgres pool and DDL for catalogue browsing
+app/catalogue/         gzipped-JSONL loader, NumPy index, manifest check, browse.py (filter/sort/paginate)
 app/services/          intent, retrieval, scoring, ranking, sessions, pipeline
 app/core/              errors, structured logging, shared title normalisation
 ```
@@ -511,7 +493,6 @@ All errors are `AppError` subclasses carrying `code`, `retryable` and
 | `NOT_FOUND` | 404 | no |
 | `RATE_LIMITED` | 429 | **yes** |
 | `PROVIDER_UNAVAILABLE` | 503 | no |
-| `CATALOGUE_UNAVAILABLE` | 503 | **yes** |
 | `INTERNAL` | 500 | no |
 
 The pipeline catches `AppError` and emits it as an `error` event; the bare
@@ -523,8 +504,19 @@ Empty result *groups* are not an error. They are a normal response body.
 
 ## How this is tested
 
-161 backend tests and 16 frontend tests, no network and no credentials. Every
+214 backend tests and 56 frontend tests, no network and no credentials. Every
 provider has a stub, so the whole pipeline runs offline and CI needs no secrets.
+
+4 backend tests and 4 frontend tests currently fail. Backend: 4 tests in
+`test_pipeline.py` fail because a vague *first-turn* query raises
+`INVALID_QUERY` before the clarity gate that should handle it runs — a real
+regression, see [Future improvements](README.md#future-improvements) #1.
+Frontend: `api.test.ts` calls `listCatalogue` with its old positional
+signature after it moved to a filters object; `CartPage.test.tsx` asserts text
+that now matches two elements; two `ExplorePage.test.tsx` tests fail because
+the component throws when mounted under the test's fetch stub, not yet
+root-caused. None of these are database- or catalogue-migration-related —
+stale/brittle tests and one real regression, not flakiness.
 
 `StubGenerationProvider` returns a scripted list of dicts and records the prompts
 it was given, so a test can assert what the model was actually asked.
@@ -558,7 +550,7 @@ work.
 - **The real catalogue is built but unevaluated.** `backend/data/` holds 6,000
   real Amazon India products with real `jina-embeddings-v3` vectors (built via
   `scripts/ingest_enriched.py --embedder jina`, see [Offline pipeline](#offline-pipeline)
-  and [Storage](#storage-files-for-recommendation-postgres-for-browsing)), so
+  and [Storage](#storage-one-in-memory-catalogue-two-access-patterns)), so
   the "not yet built" state this bullet used to describe no longer holds. What's
   still missing is a relevance evaluation against it — see the next bullet. A
   deployer must set `EMBEDDING_MODEL=jina-embeddings-v3` (the config default is
@@ -588,7 +580,7 @@ data/enriched.csv (6,094 rows, pre-enriched)
 
 **Line order is a contract.** Row *n* of the JSONL is row *n* of the matrix.
 Nothing may reorder one without the other, which is why `CatalogueIndex` asserts
-the counts match and why the Postgres mirror is one-way.
+the counts match at load time.
 
 `scripts/catalogue_build.py` holds the artifact-writing logic (trust-tier
 tagging, embedding dispatch, the JSONL/`.npy`/manifest writer) shared by both
@@ -600,8 +592,20 @@ only), `verify_attributes.py` (tier-B verifiers, shared by both pipelines), and
 
 ## Where this goes next
 
-The real ingest, which unblocks every quality claim. A labelled relevance set, so
-ranking weights can be fitted instead of assumed. Redis-backed sessions to lift
-the single-worker constraint. Editing an assumption chip directly rather than
-typing a follow-up. And IDF weighting in `HashingEmbedding`, if the keyless mode
-is meant to demo well rather than merely run.
+Leading with the two regressions, since they're bugs, not gaps:
+
+1. Fix the ambiguity/clarity-gate short-circuit (a first-turn vague query
+   raises `INVALID_QUERY` before the gate meant to handle it ever runs).
+2. Key retrieval's cross-sub-need dedup by `(sub_need, product_id)` instead of
+   `product_id` alone.
+3. Add a similarity floor to retrieval and to the rerank fallback.
+4. Build the eval harness (`eval/queries.yaml` exists; nothing runs it) —
+   property assertions first, LLM-as-judge relevance pass second.
+5. IDF weighting in `HashingEmbedding`.
+6. Redis-backed sessions, to lift the single-worker constraint.
+7. Run sub-need reranking concurrently instead of one combined prompt.
+8. Fix the two known frontend bugs (`price_tier` badge, missing `onDone`).
+9. Deploy and record the demo video.
+
+See [README.md's Future improvements](README.md#future-improvements) for the
+same list with more detail on each.

@@ -24,10 +24,13 @@ and a ₹22,000 jacket have near-identical vectors.
 (season, gender, budget) comes back as an assumption chip. Filters that had to be
 widened come back as a visible notice.
 
-**It refuses to fabricate.** Product attributes carry provenance. Only
+**It refuses to fabricate specs.** Product attributes carry provenance. Only
 title-verified facts may be stated as fact or used to exclude a product; inferred
-ones can only nudge ranking. A group with no good match returns empty and says so
-rather than padding with a bad pick.
+ones can only nudge ranking. That guarantee holds. A separate claim — that a group
+with no good match returns empty rather than padding with a bad pick — does not:
+`ranking.py`'s `build_groups()` falls back to the closest-scoring retrieved
+candidates when the LLM declines every candidate for a sub-need, with no
+similarity floor gating that fallback. See [Future improvements](#future-improvements).
 
 A real run, against the synthetic catalogue with Gemini doing the reasoning:
 
@@ -45,12 +48,12 @@ question    Are you looking for men's or women's clothing and footwear?
 [Outer Insulation]   ₹3999  Decathlon Forclaz MT100 Padded Winter Jacket for Men
 [Trekking Backpack]  ₹4299  Tripole Walker 55L Internal Frame Rucksack with Rain Cover
                             "A 55L internal frame rucksack with an included rain cover…"
-[Thermal Base Layers]  empty — No suitable match found in the catalogue for this need.
+[Thermal Base Layers]  empty — Sorry, I couldn't find anything close to this in the catalogue right now.
 ```
 
 Note the last group. It is empty and says why, rather than being dropped.
 
-## Running it
+## Setup instructions
 
 Three modes, in increasing order of what they need.
 
@@ -68,7 +71,7 @@ DATA_DIR=data/mock EMBEDDING_MODEL=hashing-bow-v1 EMBEDDING_DIMS=256 \
   GENERATION_PRIMARY=mock uvicorn app.main:app --workers 1 --port 8000
 ```
 
-A synthetic catalogue (147 invented products, 25 categories) stands in for the
+A synthetic catalogue (157 invented products, 25 categories) stands in for the
 real one, a hashed bag-of-words embedder stands in for Gemini, and a rule-based
 provider stands in for the LLM. **It proves the machinery works; it says nothing
 about recommendation quality.** The embedder has no IDF, so a query for "thermal
@@ -128,13 +131,41 @@ Details — streaming state machine, SSE parsing, component rules — in
 ### Tests
 
 ```bash
-cd backend && python -m pytest -q     # 161 tests, no network, no keys
-cd frontend && npx vitest run         # 16 tests
+cd backend && python -m pytest -q     # 214 tests, no network, no keys
+cd frontend && npx vitest run         # 56 tests
 ```
 
 Run the backend suite **from `backend/`**. `pytest.ini` lives there, so from the
 repo root `asyncio_mode` never applies and every async test fails on a missing
 plugin — a working-directory mistake that reads as a code regression.
+
+## Architecture overview
+
+```
+query
+  │
+  ├─ 1. intent     LLM   → ShoppingIntent + sub-needs + assumptions
+  ├─ 2. filter     code  → row subset surviving hard constraints
+  ├─ 3. retrieve   vec   → top-8 per sub-need, unioned, deduped
+  ├─ 4. prerank    code  → top-5 per sub-need, variant-penalised
+  └─ 5. rerank     LLM   → 3-5 picks per group + one reason each
+```
+
+Two LLM calls (intent, rerank) bracket three deterministic Python stages
+(filter, retrieve, prerank). Filtering and ranking arithmetic need to be exact
+and testable, and embeddings don't encode price — so anything that has to be
+*correct*, not just *plausible*, is plain code, not a model call.
+
+**Storage is one in-memory catalogue, not a database.** `catalogue.jsonl.gz`
+plus an `.npy` embedding matrix load once at startup and stay resident in
+process memory. `/api/recommend` searches it with a NumPy matmul;
+`/api/catalogue` (browsing) filters/sorts/paginates the same loaded list —
+one data source, two access patterns, nothing to keep in sync. Full
+rationale, including why a Postgres mirror was tried and removed, in
+[ARCHITECTURE.md](ARCHITECTURE.md#storage-one-in-memory-catalogue-two-access-patterns).
+
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the full pipeline walkthrough,
+trust tiers, provider chain design, and known constraints.
 
 ## API
 
@@ -143,7 +174,7 @@ plugin — a working-directory mistake that reads as a code regression.
 | `GET` | `/api/health` | `{"status": "ok"}` |
 | `POST` | `/api/recommend` | Runs the pipeline, returns one JSON response |
 | `POST` | `/api/recommend/stream` | Same pipeline, streamed as SSE frames |
-| `GET` | `/api/catalogue` | Browse products — filter, sort, paginate (Postgres) |
+| `GET` | `/api/catalogue` | Browse products — filter, sort, paginate (same in-memory list) |
 | `GET` | `/api/catalogue/categories` | Category names with counts |
 | `GET` | `/api/catalogue/{product_id}` | One product |
 
@@ -195,23 +226,23 @@ limits and writes user queries into access logs. The frontend reads it with
 
 Errors return `{"error": {"code", "message", "retryable"}}` with codes
 `INVALID_QUERY` (400), `NOT_FOUND` (404), `RATE_LIMITED` (429),
-`PROVIDER_UNAVAILABLE` (503), `CATALOGUE_UNAVAILABLE` (503), `INTERNAL` (500).
+`PROVIDER_UNAVAILABLE` (503), `INTERNAL` (500).
 
-`RATE_LIMITED` and `CATALOGUE_UNAVAILABLE` are `retryable: true`; the rest are
-not. That distinction is the point of having codes at all.
+Only `RATE_LIMITED` is `retryable: true`; the rest are not. That distinction is
+the point of having codes at all.
 
 ## Stack
 
 - **Backend** — Python 3.11+ (developed on 3.13), FastAPI, Pydantic v2, NumPy.
 - **Frontend** — React 19, TypeScript, Vite, Tailwind 3.
-- **Recommendation reads files, not a database.** The catalogue is a gzipped
-  JSONL plus an `.npy` matrix, loaded once at startup. At this scale a cosine
-  search over the matrix is ~1 ms; a database round trip is 1–3 ms before doing
-  any work.
-- **Postgres backs catalogue *browsing* only** (`/api/catalogue`). It is a
-  mirror, seeded one-way from the JSONL by `scripts/seed_db.py`, and it is
-  optional: if it is unreachable the app still boots and recommendation is
-  unaffected — browsing returns `CATALOGUE_UNAVAILABLE`.
+- **One data source, not two.** The catalogue is a gzipped JSONL plus an
+  `.npy` matrix, loaded once at startup and kept in process memory.
+  `/api/recommend` searches it with a cosine matmul (~1 ms at this scale);
+  `/api/catalogue` (browsing) filters, sorts and paginates the same loaded
+  list. There used to be a second store (Postgres) mirroring the JSONL
+  one-way for browsing only — dropped because a few thousand read-only rows
+  don't earn back what a service, a connection pool and a sync script cost.
+  See [ARCHITECTURE.md](ARCHITECTURE.md#storage-one-in-memory-catalogue-two-access-patterns).
 
 ### Models and providers
 
@@ -249,9 +280,8 @@ characters. Run it before assuming a key is good.
 | `GENERATION_CHAIN` | — | e.g. `gemini,groq,github`. Overrides the pair below |
 | `GENERATION_PRIMARY` / `GENERATION_FALLBACK` | `gemini` / `groq` | Legacy pair, still honoured |
 | `GEMINI_MODEL`, `GROQ_MODEL`, `CEREBRAS_MODEL`, `GITHUB_MODEL` | see table above | Model ids drift; all four are config, not code |
-| `EMBEDDING_MODEL` / `EMBEDDING_DIMS` | `gemini-embedding-001` / `768` | Pinned. Must match `embeddings.manifest.json` |
+| `EMBEDDING_MODEL` / `EMBEDDING_DIMS` | `gemini-embedding-001` / `768` | Pinned. Must match `embeddings.manifest.json` — **the config default does not match the committed catalogue**, which was built with `jina-embeddings-v3` (`backend/data/embeddings.manifest.json`). Leaving the default unset trips `ManifestMismatch` at boot against the real catalogue; set `EMBEDDING_MODEL=jina-embeddings-v3` explicitly |
 | `DATA_DIR` | `backend/data` | Point at `data/mock` for the synthetic catalogue |
-| `DATABASE_URL` | `postgresql://postgres:postgres@localhost:5432/catalogue` | Browsing only |
 | `CORS_ORIGINS` | `http://localhost:5173` | Comma-separated |
 | `SESSION_TTL_SECONDS` | `1800` | |
 | `LLM_TIMEOUT_SECONDS` | `30` | |
@@ -274,7 +304,6 @@ per-request under load.
 | `404 … no longer available to new users` | The model id retired | Set `GEMINI_MODEL`. `check_providers.py` finds this in seconds |
 | `402 payment_required` from Cerebras | Free tier does not include inference | Drop `cerebras` from `GENERATION_CHAIN` until billing is on |
 | `RATE_LIMITED` (429) | Every credential on every provider refused on quota | Add keys to `*_API_KEYS`, or wait. It is retryable |
-| `CATALOGUE_UNAVAILABLE` on `/api/catalogue` | Postgres unreachable | Start it and run `scripts/seed_db.py`. Recommendation is unaffected |
 | Browser CORS error | Frontend origin not in `CORS_ORIGINS` | Add it, or drop `VITE_API_BASE_URL` and use the Vite `/api` proxy |
 | Refinement forgets the previous query | More than one worker | `--workers 1` |
 
@@ -293,38 +322,106 @@ yet. The mock-data variant deploys with no credentials at all.
 Serverless is a poor fit: the catalogue and embedding matrix load at startup, so
 every cold start pays for it, and process-local sessions don't survive.
 
-## Current state
+## Design decisions
+
+- **Two deterministic stages bracket two LLM calls, not the reverse.** Intent
+  parsing and reranking need judgement; filtering and pre-ranking need to be
+  exact and testable. See [ARCHITECTURE.md](ARCHITECTURE.md#the-runtime-pipeline).
+- **Sub-needs get independent searches, not one blended query.** A single
+  embedding of "trekking essentials and clothing" drifts toward whatever the
+  catalogue holds most of. See [ARCHITECTURE.md](ARCHITECTURE.md#stage-1--intent--sub-needs).
+- **Attribute provenance gates hard filtering, not ranking.** Only
+  title-verified facts may exclude a product; inferred ones only nudge score.
+  See [ARCHITECTURE.md](ARCHITECTURE.md#data-trust-tiers).
+- **Generation has a fallback chain; embeddings don't.** A second key is the
+  same model; a second provider is a different vector space. See
+  [ARCHITECTURE.md](ARCHITECTURE.md#embeddings-have-no-fallback-chain).
+- **Catalogue browsing reads the same in-memory list `/api/recommend`
+  searches, not a second store.** A Postgres mirror was tried and removed —
+  thousands of read-only rows don't earn back a service and a sync script.
+  See [ARCHITECTURE.md](ARCHITECTURE.md#storage-one-in-memory-catalogue-two-access-patterns).
+- **Single worker, by design, not yet.** Sessions are a process-local dict;
+  multiple workers would split them. See [ARCHITECTURE.md](ARCHITECTURE.md#known-constraints).
+
+## AI approach
+
+Two LLM calls per request: **intent** (parses the query into a `ShoppingIntent`,
+sub-needs and assumptions) and **rerank** (picks 3–5 candidates per group and
+writes one reason each). Everything between them — hard filtering, vector
+retrieval, deterministic pre-ranking — is plain Python, because arithmetic over
+a few thousand rows must be exact, and because embeddings don't encode price.
+
+Both the generation and embedding providers have keyless stand-ins
+(`MockGeneration`, keyword rules; `HashingEmbedding`, hashed bag-of-words), so
+the whole pipeline runs with no credentials — see mode 1 under
+[Setup instructions](#setup-instructions). This proves the machinery, not
+recommendation quality: `HashingEmbedding` has no IDF, so "cotton" and
+"thermal" score alike.
+
+**There is no eval harness.** `backend/eval/queries.yaml` holds a golden and
+unseen query set; nothing runs it yet. This is a deliberate scope cut for this
+pass, not an oversight — see [Future improvements](#future-improvements) #4.
+Ranking quality is currently asserted by construction (conservative weights,
+deterministic filters, a test that bounds how much the score adjustments can
+move a candidate) rather than measured against labelled relevance judgements.
+
+## Future improvements
+
+Priority order — regressions first, then gaps:
+
+1. **Fix the ambiguity/clarity-gate short-circuit.** A vague *first-turn* query
+   (no session yet) raises `INVALID_QUERY` before the clarity gate that's
+   supposed to handle it ever runs, because `app/services/intent.py`'s
+   zero-sub-needs guard only tolerates empty sub-needs on a follow-up turn
+   (`allow_empty_sub_needs=prior is not None`).
+2. **Key retrieval's cross-sub-need dedup by `(sub_need, product_id)`, not
+   `product_id` alone.** Two sub-needs whose searches surface the same product
+   currently let only one of them keep it — this can starve or spuriously
+   empty a semantically overlapping sub-need (the "trekking essentials" /
+   "trekking clothing" shape).
+3. **Add a similarity floor to retrieval and to the rerank fallback**, chosen
+   empirically — right now `ranking.py`'s `build_groups()` pads an empty group
+   with the closest-scoring candidates regardless of how weak that match is.
+4. **Build the eval harness** (`eval/queries.yaml` exists; nothing runs it) —
+   property assertions first, LLM-as-judge relevance pass second. Explicitly
+   deferred, not attempted, in this pass.
+5. **IDF weighting in `HashingEmbedding`** — the keyless mode's only defense
+   against "cotton" outscoring "thermal" on a thermal-wear query.
+6. **Redis-backed sessions**, to lift the single-worker constraint.
+7. **Run sub-need reranking concurrently** instead of one combined prompt.
+8. **Fix two known frontend bugs:** `ProductCard` checks `price_tier` against
+   `"mid-range"`, which the backend never emits (it sends `"mid"`), so that
+   badge never renders; and the streaming hook never wires an `onDone`
+   handler, so `timings_ms`/`intent` arrive as `{}` on the client even though
+   the backend sends both.
+9. **Deploy and record the demo video** — the mock-data path needs no
+   credentials; see [DEPLOYMENT.md](DEPLOYMENT.md).
 
 **Built and tested:** the runtime pipeline, both API surfaces, streaming, the
-frontend, key rotation across four providers, the synthetic catalogue, and the
-deployment configuration. 161 backend tests and 16 frontend tests, no network and
-no credentials required.
+frontend, key rotation across four providers, the synthetic catalogue, the
+real catalogue, and the deployment configuration. 214 backend tests and 56
+frontend tests, no network and no credentials required — 4 backend and 4
+frontend currently fail; see [Pre-existing failures](ARCHITECTURE.md#how-this-is-tested)
+in ARCHITECTURE.md for which and why.
 
 **Verified against live APIs:** Gemini (generation and embeddings, 768 dims),
 Groq and GitHub Models all answer. Cerebras returns 402 — the account needs
 billing.
 
-**Real catalogue ingest:** `scripts/ingest_enriched.py` builds the real catalogue
-from `backend/data/enriched.csv` — an offline-enriched (translated, categorised,
-attribute-extracted) sample of the source dataset, 6,000 products after dropping
-94 rows with no resolved category. It maps onto `Product` with no schema
-changes and re-verifies title-derived attributes with the same
-`scripts/verify_attributes.py` gate the mock catalogue uses. Until it's run,
-`backend/data/` holds the source CSV, `enriched.csv`, `profile.json` and the
-synthetic catalogue in `data/mock/`, but not the three artifacts the app loads
-by default.
-
-**Known bugs, both frontend:**
-- `ProductCard` checks `price_tier` against `"mid-range"`, which the backend
-  never emits (it sends `"mid"`), so that badge never renders.
-- The streaming path never registers an `onDone` handler, so `timings_ms` and
-  `intent` arrive as `{}` on the client even though the backend sends both.
+**Real catalogue:** built and committed. `backend/data/` holds 6,000 real
+Amazon India products across 109 categories, embedded with `jina-embeddings-v3`
+at 768 dims (`backend/data/embeddings.manifest.json`), built by
+`scripts/ingest_enriched.py` from `backend/data/enriched.csv` — an
+offline-enriched (translated, categorised, attribute-extracted) sample of the
+source dataset, after dropping 94 rows with no resolved category. It maps onto
+`Product` with no schema changes and re-verifies title-derived attributes with
+the same `scripts/verify_attributes.py` gate the mock catalogue uses.
 
 ## Repository layout
 
 ```
-backend/app/        API, services, providers, schemas, db — the runtime path
-backend/scripts/    Profiling, verifiers, mock + real catalogue ingest, provider check, seeding
+backend/app/        API, services, providers, schemas — the runtime path
+backend/scripts/    Profiling, verifiers, mock + real catalogue ingest, provider check
 backend/data/       Source CSV (never committed), mock/ catalogue artifacts
 backend/eval/       queries.yaml — golden and unseen evaluation queries
 frontend/src/       React app

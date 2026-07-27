@@ -9,6 +9,7 @@ from app.providers.generation import (CerebrasGeneration, FallbackChain,
                                       GeminiGeneration, GenerationProvider,
                                       GitHubModelsGeneration, GroqGeneration,
                                       MockGeneration)
+from app.schemas.product import Product
 from app.services.pipeline import RecommendationPipeline
 from app.services.sessions import SessionStore
 
@@ -107,3 +108,12 @@ def get_pipeline() -> RecommendationPipeline:
         generator=_build_generation(settings),
         sessions=_sessions,
     )
+
+
+def get_products() -> list[Product]:
+    """The same in-memory catalogue app/services/retrieval.py searches.
+
+    Catalogue browsing and recommendation read one loaded list, not two
+    stores kept in sync - see app/catalogue/browse.py.
+    """
+    return get_pipeline().index.products

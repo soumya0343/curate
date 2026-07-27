@@ -1,6 +1,6 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ProductCardActions } from "./ProductCardActions";
 import { CartProvider } from "../contexts/CartContext";
 import { WishlistProvider } from "../contexts/WishlistContext";
@@ -30,6 +30,8 @@ function renderActions() {
 }
 
 describe("ProductCardActions", () => {
+  beforeEach(() => { localStorage.clear(); });
+
   it("toggles the wishlist button's label and pressed state", () => {
     renderActions();
     const wishlistButton = screen.getByRole("button", { name: /add to wishlist/i });

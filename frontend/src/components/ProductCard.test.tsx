@@ -1,6 +1,6 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { ProductCard } from "./ProductCard";
 import { CartProvider, useCart } from "../contexts/CartContext";
 import { WishlistProvider } from "../contexts/WishlistContext";
@@ -31,6 +31,8 @@ function renderCard() {
 }
 
 describe("ProductCard", () => {
+  beforeEach(() => { localStorage.clear(); });
+
   it("still renders the title, price and outbound link as before", () => {
     renderCard();
     expect(screen.getByText("Test Product")).toBeTruthy();

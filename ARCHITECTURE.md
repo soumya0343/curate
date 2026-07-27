@@ -450,24 +450,29 @@ work.
   sub-needs concurrently are the levers, neither yet pulled.
 - **Catalogue rebuild is coupled to embedding config.** Changing the model or dims
   requires re-embedding everything before the app will start.
-- **The real catalogue does not exist yet**, so no claim about coverage, recall or
-  recommendation quality in this repository is backed by a measurement.
+- **The real catalogue artifacts are not yet built into `data/`** — `scripts/ingest_enriched.py`
+  exists and is tested against `data/enriched.csv`, but running it with real
+  (`--embedder gemini`) embeddings is a deliberate, separate step, not yet taken.
+  Until then no claim about coverage, recall or recommendation quality in this
+  repository is backed by a measurement.
 
 ## Offline pipeline
 
-Not yet built. The intended shape:
+The hygiene gate → taxonomy map → quota → enrichment → verification stages
+(`docs/dataset.md` §5, `docs/taxonomy.md`) run outside this repo, against the
+full 1.59M-row source CSV, producing `data/enriched.csv` (not committed, same
+as the raw source CSV — a curated 6,094-row sample, not the full catalogue).
+`scripts/ingest_enriched.py` is the last two stages, run in-repo:
 
 ```
-1,589,160 CSV rows
-  → hygiene gate        price > 0, title length, informativeness
-  → category map        214 source category names → English, no hardcoded literals
-  → variant collapse    one representative per title-prefix family
-  → quality score       rating × review-count confidence
-  → price tiers         cohort-relative, not global thresholds
-  → category quota      stratified selection
-  → enrichment          conservative attribute extraction, LLM-assisted
-  → verification        tier-B claims checked against title_original
-  → embeddings          gemini-embedding-001 @ 768, L2-normalised
+data/enriched.csv (6,094 rows, pre-enriched)
+  → drop unresolved category  94 rows, category_source=pending_title_inference
+  → map onto Product           no schema change: direct fields + attributes dict
+  → verification               tier-B claims re-checked against title_original,
+                                scripts/verify_attributes.py — same gate the
+                                mock catalogue uses
+  → embeddings                 gemini-embedding-001 @ 768 (--embedder gemini)
+                                or hashing-bow-v1 @ 256 (--embedder hashing)
   → catalogue.jsonl.gz + embeddings.npy + embeddings.manifest.json
 ```
 
@@ -475,12 +480,13 @@ Not yet built. The intended shape:
 Nothing may reorder one without the other, which is why `CatalogueIndex` asserts
 the counts match and why the Postgres mirror is one-way.
 
-Built so far: `scripts/profile_dataset.py` (reproducible EDA over the 670 MB CSV,
-standard library only), `scripts/verify_attributes.py` (tier-B verifiers, shared
-by both pipelines), `scripts/validate_urls.py` (structural check offline, network
-sampling opt-in) and `scripts/build_mock_catalogue.py`, which produces artifacts
-in the real shape so everything downstream could be built and tested before the
-ingest exists.
+`scripts/catalogue_build.py` holds the artifact-writing logic (trust-tier
+tagging, embedding dispatch, the JSONL/`.npy`/manifest writer) shared by both
+`scripts/build_mock_catalogue.py` and `scripts/ingest_enriched.py`, so the two
+builders can't drift from the same contract. Also in `scripts/`:
+`profile_dataset.py` (reproducible EDA over the 670 MB CSV, standard library
+only), `verify_attributes.py` (tier-B verifiers, shared by both pipelines), and
+`validate_urls.py` (structural check offline, network sampling opt-in).
 
 ## Where this goes next
 

@@ -9,7 +9,8 @@ artifact must not be able to manufacture a verified fact.
 """
 import re
 
-TIER_B_FIELDS = frozenset({"capacity_l", "water_resistant", "gender", "material"})
+TIER_B_FIELDS = frozenset({"capacity_l", "water_resistant", "gender", "material",
+                           "brand", "pack_count"})
 
 _GENDER_PATTERNS = {
     "men": r"\b(men|men's|mens|male|boys)\b",
@@ -42,11 +43,27 @@ def _verify_material(value, title: str) -> bool:
     return bool(re.search(rf"\b{re.escape(value)}\b", title, re.I))
 
 
+def _verify_brand(value, title: str) -> bool:
+    if not isinstance(value, str) or not value.strip():
+        return False
+    return bool(re.search(rf"\b{re.escape(value)}\b", title, re.I))
+
+
+def _verify_pack_count(value, title: str) -> bool:
+    if not isinstance(value, (int, float)):
+        return False
+    n = int(value)
+    return bool(re.search(rf"\b(pack of|set of|pcs of)\s*{n}\b|\b{n}\s*(pcs|pieces|pack)\b",
+                          title, re.I))
+
+
 _VERIFIERS = {
     "capacity_l": _verify_capacity,
     "water_resistant": _verify_water_resistant,
     "gender": _verify_gender,
     "material": _verify_material,
+    "brand": _verify_brand,
+    "pack_count": _verify_pack_count,
 }
 
 

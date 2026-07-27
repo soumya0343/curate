@@ -21,7 +21,9 @@ class Product(BaseModel):
     title: str
     title_original: str
     description: str = ""
+    domain: str | None = None
     category: str
+    subcategory: str | None = None
     price: float
     currency: str = "INR"
     price_tier: Literal["budget", "mid", "premium", "luxury"]

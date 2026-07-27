@@ -88,9 +88,18 @@ is the mode the example above was produced in.
 
 ### 3. Real catalogue
 
-Needs the offline pipeline (see **Current state**). Once it has produced
-`catalogue.jsonl.gz`, `embeddings.npy` and `embeddings.manifest.json` in
-`backend/data/`, drop the `DATA_DIR` and `EMBEDDING_*` overrides.
+```bash
+cd backend
+python scripts/ingest_enriched.py --embedder gemini   # needs GEMINI_API_KEY; real semantic retrieval
+python scripts/ingest_enriched.py --embedder hashing  # no key, quick smoke test only
+```
+
+Reads `backend/data/enriched.csv` (not committed, same as the raw source CSV —
+see **Data**) and writes `catalogue.jsonl.gz`, `embeddings.npy` and
+`embeddings.manifest.json` into `backend/data/`. That's where `DATA_DIR`
+already defaults, so drop the `DATA_DIR` / `EMBEDDING_*` overrides from mode 2
+once it's built. `data/mock/` is untouched either way — it stays reachable via
+`DATA_DIR=data/mock` as the permanent no-credentials fallback.
 
 `--workers 1` is not optional in any mode. Sessions live in a process-local dict,
 so a session created on worker A is missing on worker B. Redis is the production
@@ -285,10 +294,15 @@ no credentials required.
 Groq and GitHub Models all answer. Cerebras returns 402 — the account needs
 billing.
 
-**Not done:** the offline pipeline that turns the 670 MB source CSV into the real
-catalogue — category map, ingest, enrichment, embeddings. Until it runs,
-`backend/data/` holds the source CSV, `profile.json` and the synthetic catalogue
-in `data/mock/`, but not the three artifacts the app loads by default.
+**Real catalogue ingest:** `scripts/ingest_enriched.py` builds the real catalogue
+from `backend/data/enriched.csv` — an offline-enriched (translated, categorised,
+attribute-extracted) sample of the source dataset, 6,000 products after dropping
+94 rows with no resolved category. It maps onto `Product` with no schema
+changes and re-verifies title-derived attributes with the same
+`scripts/verify_attributes.py` gate the mock catalogue uses. Until it's run,
+`backend/data/` holds the source CSV, `enriched.csv`, `profile.json` and the
+synthetic catalogue in `data/mock/`, but not the three artifacts the app loads
+by default.
 
 **Known bugs, both frontend:**
 - `ProductCard` checks `price_tier` against `"mid-range"`, which the backend
@@ -300,7 +314,7 @@ in `data/mock/`, but not the three artifacts the app loads by default.
 
 ```
 backend/app/        API, services, providers, schemas, db — the runtime path
-backend/scripts/    Profiling, verifiers, mock catalogue, provider check, seeding
+backend/scripts/    Profiling, verifiers, mock + real catalogue ingest, provider check, seeding
 backend/data/       Source CSV (never committed), mock/ catalogue artifacts
 backend/eval/       queries.yaml — golden and unseen evaluation queries
 frontend/src/       React app

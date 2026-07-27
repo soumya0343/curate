@@ -29,6 +29,23 @@ class RateLimited(AppError):
     http_status = 429
 
 
+class CatalogueUnavailable(AppError):
+    """The catalogue database is not reachable.
+
+    Distinct from a 500: the rest of the API still works, because recommendation
+    reads the JSONL index rather than Postgres. Only catalogue browsing is down,
+    and it is worth retrying.
+    """
+    code = "CATALOGUE_UNAVAILABLE"
+    retryable = True
+    http_status = 503
+
+
+class NotFound(AppError):
+    code = "NOT_FOUND"
+    http_status = 404
+
+
 class NoResults(AppError):
     """Every sub-need came back empty after relaxation.
 

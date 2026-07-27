@@ -5,10 +5,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.api import deps
+from app.api.routes_catalogue import router as catalogue_router
 from app.api.routes_recommend import router
 from app.config import get_settings
 from app.core.errors import AppError
 from app.core.logging import setup_logging
+from app.db.mock_db import close_db, init_db
 
 
 def create_app(load_catalogue: bool = True) -> FastAPI:
@@ -25,10 +27,15 @@ def create_app(load_catalogue: bool = True) -> FastAPI:
     async def lifespan(_: FastAPI):
         setup_logging()
         if load_catalogue:
+            # Best-effort: a missing database disables /api/catalogue (503) but
+            # must not stop the app booting, because recommendation reads the
+            # JSONL index and needs no Postgres.
+            init_db()
             # Load catalogue and vectors once, not per request. Also fails fast on
             # a manifest mismatch rather than at first query.
             deps.get_pipeline()
         yield
+        close_db()
 
     app = FastAPI(title="Personal Shopping Assistant", version="1.0.0",
                   lifespan=lifespan)
@@ -46,6 +53,7 @@ def create_app(load_catalogue: bool = True) -> FastAPI:
         return JSONResponse(status_code=exc.http_status, content=exc.envelope())
 
     app.include_router(router)
+    app.include_router(catalogue_router)
 
     return app
 

@@ -33,6 +33,7 @@ export function useRecommendation() {
   const refine = useCallback((query: string) => run(query, true), [run]);
 
   const submitStreaming = useCallback(async (query: string, useSession = false) => {
+    setStatus("loading");
     setStage("understanding");
     setError(null);
     setResponse(null);

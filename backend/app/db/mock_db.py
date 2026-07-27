@@ -47,13 +47,11 @@ CREATE TABLE IF NOT EXISTS products (
     image_url      TEXT,
     product_url    TEXT
 );
-CREATE INDEX IF NOT EXISTS idx_products_category   ON products(category);
-CREATE INDEX IF NOT EXISTS idx_products_price_tier ON products(price_tier);
-CREATE INDEX IF NOT EXISTS idx_products_domain     ON products(domain);
 
 -- CREATE TABLE IF NOT EXISTS is a no-op against a table created by an earlier
--- version of this schema, so it would leave the new columns missing and the
--- seed would fail on them. Adding them explicitly is what makes startup safe on
+-- version of this schema, so it would leave the new columns missing and both
+-- the seed script and the indexes below would fail on them. Adding them
+-- explicitly, BEFORE anything references them, is what makes startup safe on
 -- an already-seeded database.
 ALTER TABLE products ADD COLUMN IF NOT EXISTS title_original TEXT;
 ALTER TABLE products ADD COLUMN IF NOT EXISTS attributes JSONB NOT NULL DEFAULT '{}'::jsonb;
@@ -61,6 +59,10 @@ ALTER TABLE products ADD COLUMN IF NOT EXISTS domain TEXT;
 ALTER TABLE products ADD COLUMN IF NOT EXISTS subcategory TEXT;
 UPDATE products SET title_original = title WHERE title_original IS NULL;
 ALTER TABLE products ALTER COLUMN title_original SET NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_products_category   ON products(category);
+CREATE INDEX IF NOT EXISTS idx_products_price_tier ON products(price_tier);
+CREATE INDEX IF NOT EXISTS idx_products_domain     ON products(domain);
 """
 
 
@@ -90,7 +92,17 @@ def init_db(required: bool = False) -> bool:
             dsn=dsn,
             cursor_factory=psycopg2.extras.RealDictCursor,
         )
+        # Ensure table exists (idempotent). A schema error here (e.g. a hand-
+        # edited database this DDL doesn't expect) must degrade the same way an
+        # unreachable database does - recommendation reads the JSONL index and
+        # needs no Postgres at all, so this may not crash the whole app either.
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(CREATE_TABLE)
+            conn.commit()
     except psycopg2.Error as exc:
+        if _pool is not None:
+            _pool.closeall()
         _pool = None
         if required:
             raise
@@ -98,11 +110,6 @@ def init_db(required: bool = False) -> bool:
                        str(exc).strip())
         return False
 
-    # Ensure table exists (idempotent).
-    with get_connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute(CREATE_TABLE)
-        conn.commit()
     return True
 
 
